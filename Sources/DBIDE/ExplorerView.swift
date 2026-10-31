@@ -119,7 +119,10 @@ struct ExplorerView: View {
                         Button("Connect") { Task { await ds.connect() } }
                     }
                     if ds.isConnected, let schema = ds.defaultSchema ?? ds.schemas.first?.name {
-                        if ds.config.dialect.isSQL { Button("Show ER Diagram") { app.openDiagram(schema: schema, in: ds) } }
+                        if ds.config.dialect.isSQL {
+                            Button("Show ER Diagram") { app.openDiagram(schema: schema, in: ds) }
+                            Button("New Table…") { app.tableDesign = TableDesignTarget(session: ds, schema: schema, table: nil) }
+                        }
                         Button("Import CSV as New Table…") {
                             app.csvImport = CSVImportTarget(session: ds, schema: schema, table: nil)
                         }
@@ -136,7 +139,10 @@ struct ExplorerView: View {
                     Button("Refresh") {
                         if let n = ds.schema(named: schema) { Task { await ds.loadSchema(n, force: true) } }
                     }
-                    if ds.config.dialect.isSQL { Button("Show ER Diagram") { app.openDiagram(schema: schema, in: ds) } }
+                    if ds.config.dialect.isSQL {
+                        Button("Show ER Diagram") { app.openDiagram(schema: schema, in: ds) }
+                        Button("New Table…") { app.tableDesign = TableDesignTarget(session: ds, schema: schema, table: nil) }
+                    }
                     Button("Import CSV as New Table…") {
                         app.csvImport = CSVImportTarget(session: ds, schema: schema, table: nil)
                     }
@@ -146,6 +152,9 @@ struct ExplorerView: View {
                 if let ds = app.session(for: id) {
                     Button("Open Data") { app.openTable(t, in: ds) }
                     Button("Show DDL") { app.openDDL(t, in: ds) }
+                    if t.kind == .table, ds.config.dialect.isSQL {
+                        Button("Modify Table…") { app.tableDesign = TableDesignTarget(session: ds, schema: t.schema, table: t) }
+                    }
                     if t.kind == .table {
                         Button("Import CSV…") { app.csvImport = CSVImportTarget(session: ds, schema: t.schema, table: t) }
                     }

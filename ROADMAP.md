@@ -67,7 +67,7 @@ Estimates are Claude Code session time.
 | # | Item | Notes | Est. |
 |---|---|---|---|
 | 4.1 | ✅ Foreign keys & ER diagram | FKs for all three dialects (composite, SQLite implicit PK refs) shown in the tree; ⌥⌘U / schema menu opens a layered ER diagram (parents left, cycles and self-references handled), draggable boxes, zoom, hover highlight, double-click opens data, PNG export | 0.6h |
-| 4.2 | ⬜ Table designer | Create / alter table dialog that generates DDL | 1h |
+| 4.2 | ✅ Table designer | New / Modify Table: columns (name, type with suggestions, not null, PK, default, comment), reorder, live DDL preview; diff by column identity → PG ALTERs (transactional, `USING` casts), MySQL `MODIFY COLUMN`, SQLite in-place ALTER or rebuild (copy data, recreate indexes); tested on all three | 0.5h |
 | 4.3 | ✅ Import CSV | Into an existing table (column mapping, auto by name) or a new table (inferred types, leading-zero codes stay text); RFC 4180 parser, delimiter detection, preview, batched INSERTs in one transaction with progress; engine tested on SQLite / PG / MySQL — dialog not yet exercised by automated UI tests | 0.5h |
 | 4.4 | ✅ Go to table | ⌘O fuzzy-finds tables / views across data sources in use (loads their catalogs on open); ↩ opens data, ⌥↩ DDL | 0.3h |
 

@@ -74,6 +74,18 @@ struct DBIDEApp: App {
                 }
                 .keyboardShortcut("u", modifiers: [.command, .option])
                 .disabled(model.activeDataSource == nil)
+                Button("New Table…") {
+                    guard let ds = model.activeDataSource, ds.config.dialect.isSQL else { return }
+                    let schema = console?.currentSchema ?? ds.defaultSchema ?? ds.schemas.first?.name ?? "main"
+                    model.tableDesign = TableDesignTarget(session: ds, schema: schema, table: nil)
+                }
+                .disabled(model.activeDataSource?.config.dialect.isSQL != true)
+                Button("Modify Table…") {
+                    if case .table(let t) = model.selectedTab, let ds = model.session(for: t.dataSourceID) {
+                        model.tableDesign = TableDesignTarget(session: ds, schema: t.table.schema, table: t.table)
+                    }
+                }
+                .disabled({ if case .table = model.selectedTab { return model.activeDataSource?.config.dialect.isSQL != true }; return true }())
                 Button("Refresh Data Source") { Task { await model.activeDataSource?.refresh() } }
                     .disabled(model.activeDataSource?.isConnected != true)
             }
