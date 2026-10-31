@@ -178,9 +178,14 @@ private struct ResultsPanel: View {
                 }
                 ForEach(console.results) { r in
                     tabButton(
-                        title: r.title, systemImage: "tablecells",
+                        title: r.title, systemImage: r.pinned ? "pin.fill" : (r.plan != nil ? "chart.bar.doc.horizontal" : "tablecells"),
                         selected: console.selectedResultID == r.id
                     ) { console.selectedResultID = r.id }
+                    .contextMenu {
+                        Button(r.pinned ? "Unpin" : "Pin Tab") { console.togglePin(r.id) }
+                        Button("Close") { console.closeResult(r.id) }
+                        Button("Close Unpinned") { console.results.removeAll { !$0.pinned } ; console.selectedResultID = console.results.first?.id }
+                    }
                 }
                 Spacer()
                 if let r = console.results.first(where: { $0.id == console.selectedResultID }), r.plan == nil {
@@ -195,13 +200,26 @@ private struct ResultsPanel: View {
             if let r = console.results.first(where: { $0.id == console.selectedResultID }), let plan = r.plan {
                 PlanView(plan: plan).id(r.id)
             } else if let r = console.results.first(where: { $0.id == console.selectedResultID }) {
-                ResultGridView(source: .readOnly(r.result, dialect: console.dialect, version: r.id.hashValue))
+                ResultGridView(source: .readOnly(r.result, dialect: console.dialect, version: r.id.hashValue &+ r.result.rows.count))
                     .id(r.id)
                 if r.result.truncated {
-                    Text("Showing first \(r.result.rows.count) rows — raise the row limit or add LIMIT/OFFSET to see more.")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(4)
+                    HStack(spacing: 10) {
+                        Text("Showing first \(r.result.rows.count) rows.")
+                        if SQLClassifier.isReadOnly(r.result.statement, dialect: console.dialect) {
+                            Button("Load \(console.maxRows) more") {
+                                console.loadMore(r.id, upTo: r.result.rows.count + console.maxRows)
+                            }
+                            Button("Load all") { console.loadMore(r.id, upTo: nil) }
+                        } else {
+                            Text("Add LIMIT/OFFSET to see more.")
+                        }
+                        Spacer()
+                    }
+                    .font(.caption)
+                    .buttonStyle(.link)
+                    .foregroundStyle(.secondary)
+                    .disabled(console.isRunning)
+                    .padding(4)
                 }
             } else {
                 OutputLog(entries: console.log)

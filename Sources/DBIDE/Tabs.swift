@@ -18,6 +18,8 @@ struct ResultTab: Identifiable {
     var result: QueryResult
     /// Set for EXPLAIN tabs.
     var plan: ExplainResult? = nil
+    /// Pinned tabs survive the next run.
+    var pinned = false
 }
 
 /// A pending "enter parameter values" prompt; resumed exactly once.
@@ -242,7 +244,7 @@ final class ConsoleModel: Identifiable {
             }
         }
         if !newResults.isEmpty {
-            results = newResults
+            results = results.filter(\.pinned) + newResults
             selectedResultID = newResults.first?.id
         } else if selectedResultID == nil || results.isEmpty {
             selectedResultID = nil
@@ -253,6 +255,35 @@ final class ConsoleModel: Identifiable {
     private func isTransactionControl(_ sql: String) -> Bool {
         let kw = SQLLexer.leadingKeywords(sql, count: 1).uppercased()
         return ["BEGIN", "START", "COMMIT", "ROLLBACK", "END", "SAVEPOINT", "RELEASE", "SET", "SHOW", "USE"].contains(kw)
+    }
+
+    /// Re-runs a truncated read-only result with a larger row limit (nil = all rows).
+    func loadMore(_ tabID: UUID, upTo limit: Int?) {
+        guard !isRunning, let index = results.firstIndex(where: { $0.id == tabID }) else { return }
+        let sql = results[index].result.statement
+        guard SQLClassifier.isReadOnly(sql, dialect: dialect) else { return }
+        Task {
+            isRunning = true
+            defer { isRunning = false }
+            do {
+                let conn = try await ensureConnection()
+                log.append(LogEntry(kind: .statement, text: sql))
+                let res = try await conn.execute(sql, maxRows: limit ?? Int.max)
+                log.append(LogEntry(kind: .info, text: res.summary))
+                if let i = results.firstIndex(where: { $0.id == tabID }) { results[i].result = res }
+            } catch {
+                log.append(LogEntry(kind: .error, text: error.localizedDescription))
+            }
+        }
+    }
+
+    func togglePin(_ tabID: UUID) {
+        if let i = results.firstIndex(where: { $0.id == tabID }) { results[i].pinned.toggle() }
+    }
+
+    func closeResult(_ tabID: UUID) {
+        results.removeAll { $0.id == tabID }
+        if selectedResultID == tabID { selectedResultID = results.last?.id }
     }
 
     /// Shows the plan of the statement at the caret (ANALYZE really runs it; DML is rolled back).
