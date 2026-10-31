@@ -24,8 +24,8 @@ enum EditorTheme {
     }
 }
 
-/// Synchronous completion source; returns candidates for the word before the caret.
-typealias CompletionProvider = @MainActor (_ text: String, _ wordRange: NSRange) -> [String]
+/// Synchronous completion source for the caret position.
+typealias Completer = @MainActor (_ text: String, _ caret: Int) -> SQLCompletionResult
 
 struct SQLEditorView: NSViewRepresentable {
     @Binding var text: String
@@ -34,7 +34,9 @@ struct SQLEditorView: NSViewRepresentable {
     var executingRange: NSRange? = nil
     var errorRange: NSRange? = nil
     var onSelectionChange: ((NSRange) -> Void)? = nil
-    var completions: CompletionProvider? = nil
+    var completer: Completer? = nil
+    /// Bumped when more catalog data arrived; an open popup refreshes.
+    var completionVersion = 0
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -105,6 +107,10 @@ struct SQLEditorView: NSViewRepresentable {
             c.highlight()
         }
         c.updateMarkers()
+        if c.lastCompletionVersion != completionVersion {
+            c.lastCompletionVersion = completionVersion
+            if c.popup.isVisible { c.updateCompletion(explicit: false) }
+        }
     }
 
     @MainActor
@@ -114,8 +120,19 @@ struct SQLEditorView: NSViewRepresentable {
         var lastDialect: SQLDialect?
         private var shownExecuting: NSRange?
         private var shownError: NSRange?
+        let popup = CompletionPopup()
+        var lastCompletionVersion = 0
+        /// Set by the text view when the user typed a word character or `.`.
+        var triggerPending = false
+        var suppressTrigger = false
+        private var replaceRange: NSRange?
+        private var inTextChange = false
 
-        init(_ parent: SQLEditorView) { self.parent = parent }
+        init(_ parent: SQLEditorView) {
+            self.parent = parent
+            super.init()
+            popup.onAccept = { [weak self] in self?.accept($0) }
+        }
 
         func textDidChange(_ notification: Notification) {
             guard let tv = textView else { return }
@@ -123,11 +140,66 @@ struct SQLEditorView: NSViewRepresentable {
             highlight()
             shownError = nil
             updateMarkers(force: true)
+            if triggerPending || popup.isVisible {
+                inTextChange = true
+                updateCompletion(explicit: false)
+                inTextChange = false
+            }
+            triggerPending = false
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
             guard let tv = textView else { return }
             parent.onSelectionChange?(tv.selectedRange())
+            // Caret moved by click / arrows (not typing): drop the popup if it left the word.
+            if popup.isVisible, !inTextChange, let r = replaceRange {
+                let sel = tv.selectedRange()
+                if sel.length > 0 || sel.location < r.location || sel.location > NSMaxRange(r) + 1 { popup.hide() }
+            }
+        }
+
+        // MARK: Completion
+
+        func updateCompletion(explicit: Bool) {
+            guard let tv = textView, let window = tv.window, let completer = parent.completer, tv.isEditable else { return }
+            let sel = tv.selectedRange()
+            guard sel.length == 0 else { return popup.hide() }
+            let result = completer(tv.string, sel.location)
+            guard !result.items.isEmpty else {
+                popup.hide()
+                if explicit { NSSound.beep() }
+                return
+            }
+            replaceRange = result.replaceRange
+            let anchor = tv.firstRect(forCharacterRange: NSRange(location: result.replaceRange.location, length: 0), actualRange: nil)
+            popup.show(result.items, below: anchor, in: window)
+        }
+
+        func accept(_ item: SQLCompletionItem) {
+            guard let tv = textView, let r = replaceRange, NSMaxRange(r) <= (tv.string as NSString).length else { return }
+            popup.hide()
+            // The word may have grown since the popup was computed.
+            let caret = tv.selectedRange().location
+            let range = NSRange(location: r.location, length: max(r.length, caret - r.location))
+            suppressTrigger = true
+            tv.insertText(item.insertText, replacementRange: range)
+            suppressTrigger = false
+        }
+
+        /// Keys the popup handles while visible. Returns true when consumed.
+        func handleKey(_ event: NSEvent) -> Bool {
+            guard popup.isVisible else { return false }
+            switch event.keyCode {
+            case 125: popup.moveSelection(by: 1)
+            case 126: popup.moveSelection(by: -1)
+            case 121: popup.moveSelection(by: CompletionPopup.visibleRows)
+            case 116: popup.moveSelection(by: -CompletionPopup.visibleRows)
+            case 36, 76, 48:  // return, enter, tab
+                if let item = popup.selectedItem { accept(item) } else { popup.hide() }
+            case 53: popup.hide()  // escape
+            default: return false
+            }
+            return true
         }
 
         func highlight() {
@@ -180,14 +252,6 @@ struct SQLEditorView: NSViewRepresentable {
             }
         }
 
-        func textView(
-            _ textView: NSTextView, completions words: [String], forPartialWordRange charRange: NSRange,
-            indexOfSelectedItem index: UnsafeMutablePointer<Int>?
-        ) -> [String] {
-            index?.pointee = 0
-            return parent.completions?(textView.string, charRange) ?? []
-        }
-
         func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
             if selector == #selector(NSResponder.insertNewline(_:)) {
                 // Keep the current line's indentation.
@@ -215,32 +279,33 @@ struct SQLEditorView: NSViewRepresentable {
 final class SQLTextView: NSTextView {
     weak var coordinator: SQLEditorView.Coordinator?
 
-    override var rangeForUserCompletion: NSRange {
-        let s = string as NSString
-        let caret = selectedRange().location
-        var start = caret
-        while start > 0, let u = UnicodeScalar(s.character(at: start - 1)),
-            CharacterSet.alphanumerics.contains(u) || u == "_" || u == "$"
-        {
-            start -= 1
-        }
-        return NSRange(location: start, length: caret - start)
-    }
-
     override func keyDown(with event: NSEvent) {
+        if coordinator?.handleKey(event) == true { return }
         // ⌃Space triggers completion, like JetBrains IDEs.
         if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .control, event.charactersIgnoringModifiers == " " {
-            complete(nil)
+            coordinator?.updateCompletion(explicit: true)
             return
         }
         super.keyDown(with: event)
     }
 
+    /// Esc (NSTextView's default completion key) opens our popup.
+    override func complete(_ sender: Any?) {
+        coordinator?.updateCompletion(explicit: true)
+    }
+
     override func insertText(_ string: Any, replacementRange: NSRange) {
-        super.insertText(string, replacementRange: replacementRange)
-        if (string as? String) == "." {
-            DispatchQueue.main.async { [weak self] in self?.complete(nil) }
+        if let c = coordinator, !c.suppressTrigger, let s = string as? String, !s.isEmpty,
+            s.utf16.allSatisfy({ SQLCompletionWordChar.isWordChar($0) || $0 == 46 })
+        {
+            c.triggerPending = true
         }
+        super.insertText(string, replacementRange: replacementRange)
+    }
+
+    override func resignFirstResponder() -> Bool {
+        coordinator?.popup.hide()
+        return super.resignFirstResponder()
     }
 
     /// ⌘/ toggles `-- ` line comments on the selected lines.
@@ -330,5 +395,11 @@ final class LineNumberRuler: NSRulerView {
             let rect = lm.extraLineFragmentRect
             if rect.height > 0 { draw(rect.minY, rect.height) }
         }
+    }
+}
+
+enum SQLCompletionWordChar {
+    static func isWordChar(_ c: UInt16) -> Bool {
+        (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95 || c >= 128
     }
 }

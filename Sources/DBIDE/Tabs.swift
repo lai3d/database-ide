@@ -45,6 +45,9 @@ final class ConsoleModel: Identifiable {
     /// Range of the statement currently executing, highlighted in the editor.
     var executingRange: NSRange?
     var maxRows = 500
+    /// Bumped when completion metadata finished loading.
+    var catalogVersion = 0
+    @ObservationIgnored var loadingCatalog: Set<String> = []
 
     weak var app: AppModel?
 

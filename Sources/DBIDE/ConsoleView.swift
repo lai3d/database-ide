@@ -18,7 +18,8 @@ struct ConsoleView: View {
                     executingRange: console.executingRange,
                     errorRange: console.errorRange,
                     onSelectionChange: { console.selection = $0 },
-                    completions: { text, range in console.completions(text: text, wordRange: range) }
+                    completer: { text, caret in console.complete(text: text, caret: caret) },
+                    completionVersion: console.catalogVersion
                 )
                 .frame(minHeight: 120, idealHeight: 300)
                 .onChange(of: console.text) { app.scheduleSave() }
@@ -224,108 +225,42 @@ struct ExportMenu: View {
 // MARK: - Completion
 
 extension ConsoleModel {
-    /// Keyword, table and column candidates for the word at `wordRange`.
-    func completions(text: String, wordRange: NSRange) -> [String] {
-        guard let ds = dataSource else { return [] }
-        let ns = text as NSString
-        guard NSMaxRange(wordRange) <= ns.length else { return [] }
-        let prefix = ns.substring(with: wordRange)
-        let statement = SQLSplitter.statement(at: wordRange.location, in: text, dialect: dialect)?.text ?? text
-        let aliases = Self.tableAliases(in: statement, dialect: dialect)
-        let schema = currentSchema ?? ds.defaultSchema
-
-        func cachedColumns(_ table: String, schema s: String?) -> [String]? {
-            guard let node = ds.schema(named: s ?? schema ?? "") else { return nil }
-            if let info = node.tables?.first(where: { $0.name.caseInsensitiveCompare(table) == .orderedSame }) {
-                if let cols = node.columns[info.name] { return cols.map(\.name) }
-                Task { await ds.loadTable(info) }
-            } else if node.tables == nil {
-                Task { await ds.loadSchema(node) }
-            }
-            return nil
-        }
-
-        var candidates: [String] = []
-        // After `qualifier.` → columns of that table/alias, or tables of that schema.
-        if wordRange.location > 0, ns.character(at: wordRange.location - 1) == UInt16(UInt8(ascii: ".")) {
-            var start = wordRange.location - 1
-            while start > 0, let u = UnicodeScalar(ns.character(at: start - 1)),
-                CharacterSet.alphanumerics.contains(u) || u == "_" || u == "\"" || u == "`"
-            {
-                start -= 1
-            }
-            let qualifier = ns.substring(with: NSRange(location: start, length: wordRange.location - 1 - start))
-                .trimmingCharacters(in: CharacterSet(charactersIn: "\"`"))
-            if let schemaNode = ds.schemas.first(where: { $0.name.caseInsensitiveCompare(qualifier) == .orderedSame }) {
-                if let tables = schemaNode.tables {
-                    candidates = tables.map(\.name)
-                } else {
-                    Task { await ds.loadSchema(schemaNode) }
-                }
-            } else {
-                let target = aliases[qualifier.lowercased()] ?? (nil, qualifier)
-                candidates = cachedColumns(target.1, schema: target.0) ?? []
-            }
-        } else {
-            let upper = prefix.uppercased()
-            let lower = prefix.first.map { $0.isLowercase } ?? false
-            candidates += SQLKeywords.list.filter { $0.hasPrefix(upper) }.map { lower ? $0.lowercased() : $0 }
-            if let node = ds.schema(named: schema ?? "") {
-                if let tables = node.tables {
-                    candidates += tables.map(\.name)
-                } else {
-                    Task { await ds.loadSchema(node) }
+    /// Completion at `caret`, using whatever catalog is loaded; anything missing is
+    /// loaded in the background and `catalogVersion` bumps so an open popup refreshes.
+    func complete(text: String, caret: Int) -> SQLCompletionResult {
+        let empty = SQLCompletionResult(replaceRange: NSRange(location: caret, length: 0), items: [])
+        guard let ds = dataSource else { return empty }
+        if !ds.isConnected {
+            if case .connecting = ds.state {} else {
+                Task {
+                    await ds.connect()
+                    catalogVersion += 1
                 }
             }
-            var tables: [String: (String?, String)] = [:]
-            for v in aliases.values { tables[(v.0 ?? "") + "." + v.1.lowercased()] = v }
-            for (s, t) in tables.values { candidates += cachedColumns(t, schema: s) ?? [] }
-            candidates += aliases.keys.filter { !$0.isEmpty }
         }
-        var seen = Set<String>()
-        let filtered = candidates.filter {
-            (prefix.isEmpty || $0.lowercased().hasPrefix(prefix.lowercased())) && $0 != prefix && seen.insert($0).inserted
+        var catalog = CompletionCatalog(schemas: ds.schemas.map(\.name), defaultSchema: currentSchema ?? ds.defaultSchema)
+        for node in ds.schemas {
+            if let t = node.tables { catalog.tables[node.name] = t }
+            for (table, cols) in node.columns { catalog.columns[node.name + "." + table] = cols }
         }
-        return filtered.sorted { a, b in
-            let ka = SQLKeywords.all.contains(a.uppercased()), kb = SQLKeywords.all.contains(b.uppercased())
-            return ka != kb ? !ka : a.localizedCaseInsensitiveCompare(b) == .orderedAscending
-        }
-    }
-
-    /// Maps alias (and bare table name) → (schema, table) for FROM / JOIN / UPDATE / INTO clauses.
-    static func tableAliases(in sql: String, dialect: SQLDialect) -> [String: (String?, String)] {
-        let ns = sql as NSString
-        let tokens = SQLLexer.tokenize(sql, dialect: dialect).filter { $0.kind != .comment }
-        func text(_ i: Int) -> String {
-            ns.substring(with: tokens[i].range).trimmingCharacters(in: CharacterSet(charactersIn: "\"`[]"))
-        }
-        func isName(_ i: Int) -> Bool {
-            i < tokens.count && (tokens[i].kind == .identifier || tokens[i].kind == .quotedIdentifier)
-        }
-        var out: [String: (String?, String)] = [:]
-        var i = 0
-        while i < tokens.count {
-            let word = ns.substring(with: tokens[i].range).uppercased()
-            if ["FROM", "JOIN", "UPDATE", "INTO"].contains(word) {
-                var j = i + 1
-                guard isName(j) else {
-                    i += 1
-                    continue
-                }
-                var schema: String?
-                var table = text(j)
-                if j + 2 < tokens.count, ns.substring(with: tokens[j + 1].range) == ".", isName(j + 2) {
-                    schema = table
-                    table = text(j + 2)
-                    j += 2
-                }
-                out[table.lowercased()] = (schema, table)
-                j += 1
-                if j < tokens.count, ns.substring(with: tokens[j].range).uppercased() == "AS" { j += 1 }
-                if isName(j) { out[text(j).lowercased()] = (schema, table) }
+        let result = SQLCompletion.complete(text: text, caret: caret, dialect: dialect, catalog: catalog)
+        for schema in result.missingSchemas {
+            guard let node = ds.schema(named: schema), !loadingCatalog.contains("s:" + schema) else { continue }
+            loadingCatalog.insert("s:" + schema)
+            Task {
+                await ds.loadSchema(node)
+                loadingCatalog.remove("s:" + schema)
+                catalogVersion += 1
             }
-            i += 1
         }
-        return out
+        for table in result.missingTables where !loadingCatalog.contains("t:" + table.id) {
+            loadingCatalog.insert("t:" + table.id)
+            Task {
+                await ds.loadTable(table)
+                loadingCatalog.remove("t:" + table.id)
+                catalogVersion += 1
+            }
+        }
+        return result
     }
 }

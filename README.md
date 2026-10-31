@@ -16,7 +16,8 @@ A native macOS database IDE in the spirit of JetBrains DataGrip, written in Swif
   ⇧⌘↩ runs the whole script, ⌘. cancels (PostgreSQL CancelRequest, MySQL `KILL QUERY`, `sqlite3_interrupt`).
   The running statement is highlighted and errors are underlined at the server-reported position.
   Per-console schema switcher and row limit. Each console has its own session.
-- **Completion** (⌃Space / Esc, or after `.`): keywords, tables, columns of tables in the statement, `alias.` columns.
+- **Completion popup** while typing (or ⌃Space / Esc, or after `.`): context-aware — tables after FROM/JOIN,
+  columns of the statement's tables in SELECT/WHERE, `alias.` / `schema.` resolution, quoting when needed.
 - **Result grid**: one tab per result set, NULL styling, client-side sort, value viewer (pretty JSON),
   copy rows as TSV/CSV/JSON/Markdown/INSERT, export to file.
 - **Table editor**: WHERE / ORDER BY filters, paging, row count; edit cells, set NULL, add/delete rows, preview the

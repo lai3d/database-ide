@@ -14,7 +14,7 @@ Estimates are Claude Code session time.
 - ✅ SQL lexer (highlighting) and statement splitter (dollar quotes, nested comments, trigger bodies, MySQL `DELIMITER`)
 - ✅ Introspection: schemas, tables / views, columns, indexes, routines, DDL (all three dialects)
 - ✅ Export: CSV / TSV / JSON / Markdown / SQL INSERT
-- ✅ Tests: unit tests + docker-backed PostgreSQL 16 (TLS) / MySQL 8.4 / SSH bastion tests (`scripts/test-servers.sh`) — 37 tests
+- ✅ Tests: unit tests + docker-backed PostgreSQL 16 (TLS) / MySQL 8.4 / SSH bastion tests (`scripts/test-servers.sh`) — 47 tests
 
 ## Phase 1 — Core IDE (MVP)
 
@@ -25,7 +25,7 @@ Estimates are Claude Code session time.
 | 1.3 | ✅ Query console | Highlighting, line numbers, ⌘↩ statement at caret / selection, ⇧⌘↩ run all, ⌘. cancel, schema switcher, row limit, own session per console | 0.7h |
 | 1.4 | ✅ Error feedback | Running statement highlighted; server error position underlined; Output log | 0.2h |
 | 1.5 | ✅ Result grid | Tab per result set, NULL styling, sort, value viewer (pretty JSON), copy as TSV/CSV/JSON/Markdown/INSERT, export to file | 0.6h |
-| 1.6 | ✅ Completion | ⌃Space / Esc / after `.`: keywords, tables, columns, `alias.` columns | 0.3h |
+| 1.6 | ✅ Completion | Keywords, tables, columns, `alias.` columns (popup UI: see 3.1) | 0.3h |
 | 1.7 | ✅ Table data view | WHERE / ORDER BY filters, paging, row count | 0.3h |
 | 1.8 | ✅ Table data editing | Edit cells, set NULL, add / delete rows, preview SQL, submit in one transaction (rolled back unless every statement hits exactly one row); `TableEdits` in Core with unit + PG/MySQL/SQLite tests | 0.3h |
 | 1.9 | ✅ DDL viewer, query history, persistence | History panel (⇧⌘E); consoles and their text survive restarts | 0.3h |
@@ -44,7 +44,7 @@ Estimates are Claude Code session time.
 
 | # | Item | Notes | Est. |
 |---|---|---|---|
-| 3.1 | ⬜ Completion popup | Custom popup as in golang-ide (type-ahead, icons for table / column / keyword) instead of the NSTextView one | 0.6h |
+| 3.1 | ✅ Completion popup | Pops up while typing / after `.` / ⌃Space; icons for table, view, column, schema, alias, keyword; context-aware (tables after FROM/JOIN, columns in SELECT/WHERE), alias and `schema.` resolution, quotes names when needed, loads metadata lazily and refreshes. Engine in Core (`SQLCompletion`) with tests | 0.6h |
 | 3.2 | ⬜ SQL formatter | Reformat statement / selection (⌥⌘L) | 0.5h |
 | 3.3 | ⬜ Bind parameters | Prompt for `?` / `:name` / `$1` values before running | 0.4h |
 | 3.4 | ⬜ Explain plan | `EXPLAIN (ANALYZE)` rendered as a tree with costs | 0.6h |
