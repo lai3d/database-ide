@@ -44,6 +44,7 @@ final class AppModel {
     var editingIsNew = false
     var showHistory = false
     var showGoTo = false
+    var csvImport: CSVImportTarget?
 
     private let store = Store()
     private var saveTask: Task<Void, Never>?

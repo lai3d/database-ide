@@ -25,6 +25,7 @@ struct ContentView: View {
             DataSourceEditor(config: config, isNew: app.editingIsNew)
         }
         .sheet(isPresented: $app.showGoTo) { GoToTableView() }
+        .sheet(item: $app.csvImport) { CSVImportView(target: $0) }
         .inspector(isPresented: $app.showHistory) {
             HistoryView().inspectorColumnWidth(min: 240, ideal: 320, max: 500)
         }

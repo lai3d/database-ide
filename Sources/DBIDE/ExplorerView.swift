@@ -118,6 +118,11 @@ struct ExplorerView: View {
                     } else {
                         Button("Connect") { Task { await ds.connect() } }
                     }
+                    if ds.isConnected, let schema = ds.defaultSchema ?? ds.schemas.first?.name {
+                        Button("Import CSV as New Table…") {
+                            app.csvImport = CSVImportTarget(session: ds, schema: schema, table: nil)
+                        }
+                    }
                     Divider()
                     Button("Properties…") { app.beginEdit(ds) }
                     Button("Duplicate") { app.duplicate(ds) }
@@ -130,12 +135,18 @@ struct ExplorerView: View {
                     Button("Refresh") {
                         if let n = ds.schema(named: schema) { Task { await ds.loadSchema(n, force: true) } }
                     }
+                    Button("Import CSV as New Table…") {
+                        app.csvImport = CSVImportTarget(session: ds, schema: schema, table: nil)
+                    }
                     Button("Copy Name") { copy(schema) }
                 }
             case .table(let id, let t):
                 if let ds = app.session(for: id) {
                     Button("Open Data") { app.openTable(t, in: ds) }
                     Button("Show DDL") { app.openDDL(t, in: ds) }
+                    if t.kind == .table {
+                        Button("Import CSV…") { app.csvImport = CSVImportTarget(session: ds, schema: t.schema, table: t) }
+                    }
                     Divider()
                     let q = ds.config.dialect.qualified(schema: t.schema, name: t.name)
                     Button("SELECT in Console") { app.insertIntoConsole("SELECT * FROM \(q);", dataSource: id) }
