@@ -75,13 +75,19 @@ public struct Introspector: Sendable {
 
     private func lit(_ s: String) -> String { dialect.literal(s) }
     private var mongo: MongoConnection? { connection as? MongoConnection }
+    /// Engine-specific catalog for ClickHouse / SQL Server / Redis.
+    private var engine: (any EngineIntrospection)? {
+        if let c = connection as? ClickHouseConnection { return ClickHouseIntrospection(c: c) }
+        return engineIntrospection(for: connection)
+    }
 
     // MARK: Schemas
 
     public func schemas() async throws -> [String] {
+        if let e = engine { return try await e.schemas() }
         if let m = mongo { return try await m.introspectDatabases() }
         switch dialect {
-        case .mongodb: fatalError("handled above")
+        case .mongodb, .clickhouse, .redis, .sqlserver: fatalError("handled above")
         case .sqlite:
             return try await connection.execute("PRAGMA database_list").rows.compactMap {
                 $0.count > 1 ? $0[1].displayString : nil
@@ -105,9 +111,10 @@ public struct Introspector: Sendable {
 
     /// Schema the session uses by default.
     public func currentSchema() async throws -> String? {
+        if let e = engine { return try await e.currentSchema() }
         if let m = mongo { return m.database }
         switch dialect {
-        case .mongodb: fatalError("handled above")
+        case .mongodb, .clickhouse, .redis, .sqlserver: fatalError("handled above")
         case .sqlite: return "main"
         case .postgres: return try await connection.strings("SELECT current_schema()").first
         case .mysql: return try await connection.strings("SELECT DATABASE()").first
@@ -117,9 +124,10 @@ public struct Introspector: Sendable {
     // MARK: Tables
 
     public func tables(schema: String) async throws -> [TableInfo] {
+        if let e = engine { return try await e.tables(schema: schema) }
         if let m = mongo { return try await m.introspectCollections(schema) }
         switch dialect {
-        case .mongodb: fatalError("handled above")
+        case .mongodb, .clickhouse, .redis, .sqlserver: fatalError("handled above")
         case .sqlite:
             let rows = try await connection.execute(
                 """
@@ -167,9 +175,10 @@ public struct Introspector: Sendable {
     // MARK: Columns
 
     public func columns(schema: String, table: String) async throws -> [ColumnInfo] {
+        if let e = engine { return try await e.columns(schema: schema, table: table) }
         if let m = mongo { return try await m.introspectFields(schema, table) }
         switch dialect {
-        case .mongodb: fatalError("handled above")
+        case .mongodb, .clickhouse, .redis, .sqlserver: fatalError("handled above")
         case .sqlite:
             let rows = try await connection.execute(
                 "PRAGMA \(dialect.quote(schema)).table_info(\(dialect.quote(table)))"
@@ -231,9 +240,10 @@ public struct Introspector: Sendable {
     // MARK: Indexes
 
     public func indexes(schema: String, table: String) async throws -> [IndexInfo] {
+        if let e = engine { return try await e.indexes(schema: schema, table: table) }
         if let m = mongo { return try await m.introspectIndexes(schema, table) }
         switch dialect {
-        case .mongodb: fatalError("handled above")
+        case .mongodb, .clickhouse, .redis, .sqlserver: fatalError("handled above")
         case .sqlite:
             let list = try await connection.execute(
                 "PRAGMA \(dialect.quote(schema)).index_list(\(dialect.quote(table)))"
@@ -293,9 +303,10 @@ public struct Introspector: Sendable {
 
     /// All foreign keys declared by tables in `schema`.
     public func foreignKeys(schema: String) async throws -> [ForeignKeyInfo] {
+        if let e = engine { return try await e.foreignKeys(schema: schema) }
         if mongo != nil { return [] }
         switch dialect {
-        case .mongodb: fatalError("handled above")
+        case .mongodb, .clickhouse, .redis, .sqlserver: fatalError("handled above")
         case .postgres:
             let cols = { (keys: String, rel: String) in
                 """
@@ -375,9 +386,10 @@ public struct Introspector: Sendable {
     // MARK: Routines
 
     public func routines(schema: String) async throws -> [RoutineInfo] {
+        if let e = engine { return try await e.routines(schema: schema) }
         if mongo != nil { return [] }
         switch dialect {
-        case .mongodb: fatalError("handled above")
+        case .mongodb, .clickhouse, .redis, .sqlserver: fatalError("handled above")
         case .sqlite:
             return []
         case .postgres:
@@ -404,9 +416,10 @@ public struct Introspector: Sendable {
     // MARK: DDL
 
     public func ddl(for table: TableInfo) async throws -> String {
+        if let e = engine { return try await e.ddl(for: table) }
         if let m = mongo { return try await m.introspectDDL(table) }
         switch dialect {
-        case .mongodb: fatalError("handled above")
+        case .mongodb, .clickhouse, .redis, .sqlserver: fatalError("handled above")
         case .sqlite:
             let sql = try await connection.strings(
                 """

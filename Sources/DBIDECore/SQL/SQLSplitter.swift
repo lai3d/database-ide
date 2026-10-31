@@ -18,6 +18,7 @@ public struct SQLStatement: Sendable, Equatable {
 public enum SQLSplitter {
     public static func split(_ script: String, dialect: SQLDialect) -> [SQLStatement] {
         if dialect == .mongodb { return MongoShellParser.split(script) }
+        if dialect == .redis { return splitLines(script) }
         let s = Array(script.utf16)
         let n = s.count
         var statements: [SQLStatement] = []
@@ -41,6 +42,21 @@ public enum SQLSplitter {
         while i < n {
             let c = s[i]
             // MySQL DELIMITER directive (must start a line).
+            // SQL Server batch separator: a line with only GO.
+            if lineStart, dialect == .sqlserver {
+                var j = i
+                while j < n, s[j] == 32 || s[j] == 9 { j += 1 }
+                if matchesWord(s, j, "GO") {
+                    var k = j + 2
+                    while k < n, s[k] == 32 || s[k] == 9 || s[k] == 13 { k += 1 }
+                    if k >= n || s[k] == 10 {
+                        emit(j)
+                        i = k
+                        stmtStart = k
+                        continue
+                    }
+                }
+            }
             if lineStart, dialect == .mysql {
                 var j = i
                 while j < n, s[j] == 32 || s[j] == 9 { j += 1 }
@@ -130,6 +146,22 @@ public enum SQLSplitter {
         // …or the previous one (e.g. caret at the end of the document).
         if let before, blank(gap(NSMaxRange(before.range), offset)) { return before }
         return nil
+    }
+
+    /// One statement per non-empty, non-comment line (Redis).
+    static func splitLines(_ script: String) -> [SQLStatement] {
+        var out: [SQLStatement] = []
+        var location = 0
+        for line in script.components(separatedBy: "\n") {
+            let length = (line as NSString).length
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if !trimmed.isEmpty, !trimmed.hasPrefix("#") {
+                let lead = (line as NSString).length - (line.drop { $0 == " " || $0 == "\t" } as Substring).utf16.count
+                out.append(SQLStatement(text: trimmed, range: NSRange(location: location + lead, length: (trimmed as NSString).length)))
+            }
+            location += length + 1
+        }
+        return out
     }
 
     private static func makeStatement(_ s: [UInt16], _ start: Int, _ end: Int) -> SQLStatement? {

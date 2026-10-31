@@ -83,7 +83,7 @@ struct ConsoleView: View {
                 .frame(maxWidth: 180)
                 .help("Current schema")
             }
-            if console.dialect.isSQL {
+            if console.dialect.supportsTransactions {
             Divider().frame(height: 16)
             Picker("Transaction", selection: $console.autoCommit) {
                 Text("Auto").tag(true)

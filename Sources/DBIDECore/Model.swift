@@ -132,10 +132,21 @@ public struct DatabaseError: Error, LocalizedError, Sendable, Equatable {
 }
 
 public enum SQLDialect: String, Codable, Sendable, CaseIterable {
-    case sqlite, postgres, mysql, mongodb
+    case sqlite, postgres, mysql, mongodb, clickhouse, sqlserver, redis
 
-    /// SQL databases (MongoDB uses shell syntax instead).
-    public var isSQL: Bool { self != .mongodb }
+    /// SQL databases (MongoDB and Redis use their own command syntax).
+    public var isSQL: Bool { self != .mongodb && self != .redis }
+
+    /// Whether multi-statement transactions are available (BEGIN / COMMIT / ROLLBACK).
+    public var supportsTransactions: Bool { [.postgres, .mysql, .sqlite, .sqlserver].contains(self) }
+
+    public var beginTransaction: String {
+        switch self {
+        case .mysql: "START TRANSACTION"
+        case .sqlserver: "BEGIN TRANSACTION"
+        default: "BEGIN"
+        }
+    }
 
     public var displayName: String {
         switch self {
@@ -143,6 +154,9 @@ public enum SQLDialect: String, Codable, Sendable, CaseIterable {
         case .postgres: "PostgreSQL"
         case .mysql: "MySQL"
         case .mongodb: "MongoDB"
+        case .clickhouse: "ClickHouse"
+        case .sqlserver: "SQL Server"
+        case .redis: "Redis"
         }
     }
 
@@ -152,14 +166,18 @@ public enum SQLDialect: String, Codable, Sendable, CaseIterable {
         case .postgres: 5432
         case .mysql: 3306
         case .mongodb: 27017
+        case .clickhouse: 8123
+        case .sqlserver: 1433
+        case .redis: 6379
         }
     }
 
     /// Quotes an identifier for this dialect.
     public func quote(_ identifier: String) -> String {
         switch self {
-        case .mongodb: identifier
-        case .mysql: "`" + identifier.replacingOccurrences(of: "`", with: "``") + "`"
+        case .mongodb, .redis: identifier
+        case .mysql, .clickhouse: "`" + identifier.replacingOccurrences(of: "`", with: "``") + "`"
+        case .sqlserver: "[" + identifier.replacingOccurrences(of: "]", with: "]]") + "]"
         default: "\"" + identifier.replacingOccurrences(of: "\"", with: "\"\"") + "\""
         }
     }
@@ -167,13 +185,16 @@ public enum SQLDialect: String, Codable, Sendable, CaseIterable {
     /// Quotes a string literal for this dialect.
     public func literal(_ value: String) -> String {
         if self == .mongodb { return BSONFormatter.quote(value) }
+        if self == .redis {
+            return "\"" + value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
+        }
         var v = value.replacingOccurrences(of: "'", with: "''")
-        if self == .mysql { v = v.replacingOccurrences(of: "\\", with: "\\\\") }
-        return "'" + v + "'"
+        if self == .mysql || self == .clickhouse { v = v.replacingOccurrences(of: "\\", with: "\\\\") }
+        return (self == .sqlserver ? "N'" : "'") + v + "'"
     }
 
     public func qualified(schema: String?, name: String) -> String {
-        if self == .mongodb { return name }
+        if self == .mongodb || self == .redis { return name }
         guard let schema, !schema.isEmpty, !(self == .sqlite && schema == "main") else { return quote(name) }
         return quote(schema) + "." + quote(name)
     }

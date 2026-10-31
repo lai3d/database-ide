@@ -122,6 +122,13 @@ public struct DataSourceConfig: Codable, Sendable, Identifiable, Hashable {
             return conn
         case .mongodb:
             return try await MongoConnection.connect(config: self, password: password)
+        case .clickhouse:
+            let (h, p, tls) = try await endpoint()
+            return try await ClickHouseConnection.connect(host: h, port: p, user: user, password: password, database: database, tls: tls)
+        case .sqlserver:
+            throw DatabaseError("SQL Server driver not available yet")
+        case .redis:
+            throw DatabaseError("Redis driver not available yet")
         }
     }
 

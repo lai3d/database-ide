@@ -99,6 +99,15 @@ public enum SQLLexer {
         let n = s.count
         let c = s[i]
         let next: UInt16 = i + 1 < n ? s[i + 1] : 0
+        if dialect == .redis {
+            if c == ch("#") && (i == 0 || s[i - 1] == 10) {
+                var j = i
+                while j < n, s[j] != 10 { j += 1 }
+                return j
+            }
+            if c == ch("'") || c == ch("\"") { return quoted(s, i, quote: c, backslash: true) }
+            return nil
+        }
         if dialect == .mongodb {
             if c == ch("/") && next == ch("/") {
                 var j = i
@@ -142,13 +151,14 @@ public enum SQLLexer {
         if next == ch("'"), [ch("E"), ch("e"), ch("N"), ch("X"), ch("x"), ch("B"), ch("b")].contains(c),
             i == 0 || !isIdentPart(s[i - 1])
         {
-            let backslash = dialect == .mysql || c == ch("E") || c == ch("e")
+            let backslash = dialect == .mysql || dialect == .clickhouse || c == ch("E") || c == ch("e")
             return quoted(s, i + 1, quote: ch("'"), backslash: backslash)
         }
-        if c == ch("'") { return quoted(s, i, quote: c, backslash: dialect == .mysql) }
-        if c == ch("\"") { return quoted(s, i, quote: c, backslash: dialect == .mysql) }
-        if c == ch("`"), dialect == .mysql || dialect == .sqlite { return quoted(s, i, quote: c, backslash: false) }
-        if c == ch("["), dialect == .sqlite {
+        let backslashStrings = dialect == .mysql || dialect == .clickhouse
+        if c == ch("'") { return quoted(s, i, quote: c, backslash: backslashStrings) }
+        if c == ch("\"") { return quoted(s, i, quote: c, backslash: backslashStrings) }
+        if c == ch("`"), dialect == .mysql || dialect == .sqlite || dialect == .clickhouse { return quoted(s, i, quote: c, backslash: false) }
+        if c == ch("["), dialect == .sqlite || dialect == .sqlserver {
             var j = i + 1
             while j < n, s[j] != ch("]") { j += 1 }
             return min(n, j + 1)

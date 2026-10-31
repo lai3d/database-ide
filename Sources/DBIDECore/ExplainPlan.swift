@@ -55,13 +55,20 @@ public enum Explainer {
     public static func explain(_ sql: String, analyze: Bool, on c: any DatabaseConnection) async throws -> ExplainResult {
         let sql = sql.trimmingCharacters(in: CharacterSet(charactersIn: "; \n\t"))
         let readOnly = ["SELECT", "WITH", "VALUES", "TABLE"].contains(SQLLexer.leadingKeywords(sql, count: 1).uppercased())
-        let wrap = analyze && !readOnly && c.dialect.isSQL && c.dialect != .sqlite && !c.inTransaction
-        if wrap { _ = try await c.execute(c.dialect == .mysql ? "START TRANSACTION" : "BEGIN") }
+        let wrap = analyze && !readOnly && c.dialect.supportsTransactions && c.dialect != .sqlite && !c.inTransaction
+        if wrap { _ = try await c.execute(c.dialect.beginTransaction) }
         do {
             let result: ExplainResult
             switch c.dialect {
             case .mongodb:
                 result = try await explainMongo(sql, analyze: analyze, on: c)
+            case .redis:
+                throw DatabaseError("Redis has no query plans")
+            case .clickhouse:
+                let text = try await c.strings("EXPLAIN indexes = 1 " + sql).joined(separator: "\n")
+                result = parseIndentedTree(text, unit: 2)
+            case .sqlserver:
+                result = try await explainSQLServer(sql, analyze: analyze, on: c)
             case .postgres:
                 let opts = analyze ? "FORMAT JSON, ANALYZE, BUFFERS" : "FORMAT JSON"
                 let json = try await c.strings("EXPLAIN (\(opts)) \(sql)").joined()
@@ -179,6 +186,101 @@ public enum Explainer {
             node.loops = parts[3].split(separator: "=").last.flatMap { Double($0) }
         }
         return node
+    }
+
+    // MARK: ClickHouse
+
+    /// Plans printed as indented lines (two spaces per level); deeper lines that are not
+    /// operators (e.g. "Indexes:", "Keys:") become details of the node above.
+    static func parseIndentedTree(_ text: String, unit: Int) -> ExplainResult {
+        struct Frame { var depth: Int; var node: PlanNode }
+        var stack: [Frame] = []
+        var roots: [PlanNode] = []
+        func attach(_ n: PlanNode) {
+            if stack.isEmpty { roots.append(n) } else { stack[stack.count - 1].node.children.append(n) }
+        }
+        func pop(to depth: Int) {
+            while let last = stack.last, last.depth >= depth {
+                stack.removeLast()
+                attach(last.node)
+            }
+        }
+        for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
+            let indent = line.prefix { $0 == " " }.count
+            let body = line.trimmingCharacters(in: .whitespaces)
+            let depth = indent / max(unit, 1)
+            // Operator lines start with a capitalized step name and are not "Key: value" details.
+            let isOperator = body.first?.isUppercase == true && !body.contains(": ") && !body.hasSuffix(":")
+            if isOperator || stack.isEmpty {
+                pop(to: depth)
+                stack.append(Frame(depth: depth, node: PlanNode(title: body)))
+            } else {
+                stack[stack.count - 1].node.details.append(body)
+            }
+        }
+        pop(to: 0)
+        let root = roots.count == 1 ? roots[0] : PlanNode(title: "Plan", children: roots)
+        return ExplainResult(root: root, analyzed: false, planningTime: nil, executionTime: nil, raw: text)
+    }
+
+    // MARK: SQL Server
+
+    static func explainSQLServer(_ sql: String, analyze: Bool, on c: any DatabaseConnection) async throws -> ExplainResult {
+        let option = analyze ? "STATISTICS PROFILE" : "SHOWPLAN_ALL"
+        _ = try await c.execute("SET \(option) ON")
+        let r: QueryResult
+        do {
+            r = try await c.execute(sql)
+            _ = try await c.execute("SET \(option) OFF")
+        } catch {
+            _ = try? await c.execute("SET \(option) OFF")
+            throw error
+        }
+        return parseSQLServerPlan(r, analyzed: analyze)
+    }
+
+    static func parseSQLServerPlan(_ r: QueryResult, analyzed: Bool) -> ExplainResult {
+        let names = r.columns.map { $0.name.lowercased() }
+        func col(_ n: String) -> Int? { names.firstIndex(of: n.lowercased()) }
+        func num(_ row: [SQLValue], _ n: String) -> Double? {
+            guard let i = col(n), i < row.count else { return nil }
+            switch row[i] {
+            case .integer(let v): return Double(v)
+            case .real(let v): return v
+            case .text(let t): return Double(t)
+            default: return nil
+            }
+        }
+        func text(_ row: [SQLValue], _ n: String) -> String? {
+            guard let i = col(n), i < row.count, !row[i].isNull else { return nil }
+            return row[i].displayString
+        }
+        var nodes: [Int: PlanNode] = [:]
+        var parents: [Int: Int] = [:]
+        var order: [Int] = []
+        for row in r.rows {
+            guard let id = num(row, "NodeId").map(Int.init) else { continue }
+            let op = text(row, "PhysicalOp") ?? text(row, "StmtText")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "?"
+            var title = op
+            if let logical = text(row, "LogicalOp"), logical != op { title += " (\(logical))" }
+            var details: [String] = []
+            if let arg = text(row, "Argument") { details.append(arg) }
+            nodes[id] = PlanNode(
+                title: title, details: details, totalCost: num(row, "TotalSubtreeCost"), planRows: num(row, "EstimateRows"),
+                actualTime: nil, actualRows: num(row, "Rows").map { $0 / max(1, num(row, "Executes") ?? 1) },
+                loops: num(row, "Executes"))
+            parents[id] = num(row, "Parent").map(Int.init) ?? 0
+            order.append(id)
+        }
+        func build(_ id: Int) -> PlanNode {
+            var n = nodes[id]!
+            n.children = order.filter { parents[$0] == id && $0 != id }.map(build)
+            return n
+        }
+        let roots = order.filter { parents[$0] == 0 || nodes[parents[$0]!] == nil }.map(build)
+        let root = roots.count == 1 ? roots[0] : PlanNode(title: "Plan", children: roots)
+        let raw = r.rows.map { row in text(row, "StmtText") ?? "" }.joined(separator: "\n")
+        return ExplainResult(root: root, analyzed: analyzed, planningTime: nil, executionTime: nil, raw: raw)
     }
 
     // MARK: MongoDB

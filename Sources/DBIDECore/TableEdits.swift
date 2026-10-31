@@ -93,14 +93,14 @@ public struct TableEdits: Sendable, Equatable {
     /// otherwise everything is rolled back.
     public static func apply(_ statements: [String], on connection: any DatabaseConnection) async throws {
         guard !statements.isEmpty else { return }
-        if connection.dialect == .mongodb {  // no multi-document transaction on standalone servers
+        if !connection.dialect.supportsTransactions {  // MongoDB standalone, ClickHouse, Redis
             for sql in statements {
                 let r = try await connection.execute(sql)
                 if let n = r.affectedRows, n != 1 { throw DatabaseError("Expected to change 1 document but changed \(n).\n\(sql)") }
             }
             return
         }
-        _ = try await connection.execute(connection.dialect == .mysql ? "START TRANSACTION" : "BEGIN")
+        _ = try await connection.execute(connection.dialect.beginTransaction)
         do {
             for sql in statements {
                 let r = try await connection.execute(sql)

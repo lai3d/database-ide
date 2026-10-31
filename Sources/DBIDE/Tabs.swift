@@ -127,6 +127,8 @@ final class ConsoleModel: Identifiable {
         case .postgres: _ = try await conn.execute("SET search_path TO \(conn.dialect.quote(schema))")
         case .mysql: _ = try await conn.execute("USE \(conn.dialect.quote(schema))")
         case .mongodb: (conn as? MongoConnection)?.database = schema
+        case .clickhouse, .sqlserver: _ = try await conn.execute("USE \(conn.dialect.quote(schema))")
+        case .redis: _ = try await conn.execute("SELECT \(schema.replacingOccurrences(of: "db", with: ""))")
         case .sqlite: break
         }
     }
@@ -217,7 +219,7 @@ final class ConsoleModel: Identifiable {
             executingRange = st.range
             if !autoCommit, !conn.inTransaction, !isTransactionControl(st.text) {
                 do {
-                    _ = try await conn.execute(dialect == .mysql ? "START TRANSACTION" : "BEGIN")
+                    _ = try await conn.execute(dialect.beginTransaction)
                     log.append(LogEntry(kind: .info, text: "Transaction started (manual commit mode)"))
                 } catch {
                     log.append(LogEntry(kind: .error, text: error.localizedDescription))
@@ -233,7 +235,7 @@ final class ConsoleModel: Identifiable {
                 if res.hasResultSet {
                     newResults.append(ResultTab(title: resultTitle(st.text, index: newResults.count), result: res))
                 }
-                if dialect == .mysql || dialect == .mongodb, let schema = useTarget(st.text) { currentSchema = schema }
+                if [.mysql, .mongodb, .clickhouse, .sqlserver].contains(dialect), let schema = useTarget(st.text) { currentSchema = schema }
             } catch {
                 log.append(LogEntry(kind: .error, text: error.localizedDescription))
                 if let e = error as? DatabaseError, let pos = e.position {
@@ -425,7 +427,8 @@ final class TableDataModel: Identifiable {
 
     var title: String { table.name }
     var dialect: SQLDialect { app?.session(for: dataSourceID)?.config.dialect ?? .postgres }
-    var isEditable: Bool { !primaryKey.isEmpty && table.kind == .table }
+    /// ClickHouse updates are asynchronous mutations and Redis values are not rows: browse only.
+    var isEditable: Bool { !primaryKey.isEmpty && table.kind == .table && dialect != .clickhouse && dialect != .redis }
     var hasPendingChanges: Bool { !pending.isEmpty }
 
     private func ensureConnection() async throws -> any DatabaseConnection {

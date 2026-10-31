@@ -60,6 +60,10 @@ public struct TableDesign: Sendable, Equatable {
             }
         }
         switch conn.dialect {
+        case .sqlserver:
+            d.primaryKeyName = try await conn.strings(
+                "SELECT name FROM sys.key_constraints WHERE type = 'PK' AND parent_object_id = OBJECT_ID(\(conn.dialect.literal(table.schema + "." + table.name)))"
+            ).first
         case .postgres:
             d.primaryKeyName = try await conn.strings(
                 "SELECT conname FROM pg_constraint WHERE contype = 'p' AND conrelid = \(conn.dialect.literal(conn.dialect.qualified(schema: table.schema, name: table.name)))::regclass"
@@ -96,7 +100,14 @@ public struct TableDesign: Sendable, Equatable {
         if !(dialect == .sqlite && pk.count == 1), !pk.isEmpty {
             lines.append("    PRIMARY KEY (\(pk.map { dialect.quote($0.name) }.joined(separator: ", ")))")
         }
+        if dialect == .clickhouse {
+            lines = columns.map { "    " + columnDefinition($0, dialect: dialect) }
+        }
         var create = "CREATE TABLE \(qt) (\n\(lines.joined(separator: ",\n"))\n)"
+        if dialect == .clickhouse {
+            create += "\nENGINE = MergeTree\nORDER BY \(pk.isEmpty ? "tuple()" : "(" + pk.map { dialect.quote($0.name) }.joined(separator: ", ") + ")")"
+            if !comment.isEmpty { create += "\nCOMMENT \(dialect.literal(comment))" }
+        }
         if dialect == .mysql, !comment.isEmpty { create += " COMMENT \(dialect.literal(comment))" }
         var out = [create]
         if dialect == .postgres {
@@ -109,6 +120,14 @@ public struct TableDesign: Sendable, Equatable {
     }
 
     func columnDefinition(_ c: Column, dialect: SQLDialect, inlinePK: Bool = false) -> String {
+        if dialect == .clickhouse {
+            let nullable = c.nullable && !c.primaryKey && !c.type.hasPrefix("Nullable(")
+            var s = "\(dialect.quote(c.name)) \(nullable ? "Nullable(\(c.type))" : c.type)"
+            let d = c.defaultValue.trimmingCharacters(in: .whitespaces)
+            if !d.isEmpty { s += " DEFAULT \(d)" }
+            if !c.comment.isEmpty { s += " COMMENT \(dialect.literal(c.comment))" }
+            return s
+        }
         var s = "\(dialect.quote(c.name)) \(c.type)"
         if inlinePK && c.primaryKey { s += " PRIMARY KEY" }
         if !c.nullable { s += " NOT NULL" }
@@ -126,7 +145,9 @@ public struct TableDesign: Sendable, Equatable {
         case .postgres: return postgresAlter(from: original)
         case .mysql: return mysqlAlter(from: original)
         case .sqlite: return sqliteAlter(from: original)
-        case .mongodb: return []
+        case .clickhouse: return clickhouseAlter(from: original)
+        case .sqlserver: return sqlServerAlter(from: original)
+        case .mongodb, .redis: return []
         }
     }
 
@@ -214,6 +235,58 @@ public struct TableDesign: Sendable, Equatable {
         return out
     }
 
+    private func clickhouseAlter(from original: TableDesign) -> [String] {
+        let d = SQLDialect.clickhouse
+        var qt = d.qualified(schema: original.schema, name: original.name)
+        var out: [String] = []
+        if name != original.name {
+            out.append("RENAME TABLE \(qt) TO \(d.qualified(schema: schema, name: name))")
+            qt = d.qualified(schema: schema, name: name)
+        }
+        let (added, dropped, kept) = diff(original)
+        for c in dropped { out.append("ALTER TABLE \(qt) DROP COLUMN \(d.quote(c.name))") }
+        for (o, n) in kept {
+            if o.name != n.name { out.append("ALTER TABLE \(qt) RENAME COLUMN \(d.quote(o.name)) TO \(d.quote(n.name))") }
+            var renamed = o
+            renamed.name = n.name
+            renamed.primaryKey = n.primaryKey
+            if renamed != n { out.append("ALTER TABLE \(qt) MODIFY COLUMN \(columnDefinition(n, dialect: d))") }
+        }
+        for c in added { out.append("ALTER TABLE \(qt) ADD COLUMN \(columnDefinition(c, dialect: d))") }
+        if comment != original.comment { out.append("ALTER TABLE \(qt) MODIFY COMMENT \(d.literal(comment))") }
+        return out
+    }
+
+    private func sqlServerAlter(from original: TableDesign) -> [String] {
+        let d = SQLDialect.sqlserver
+        var qt = d.qualified(schema: original.schema, name: original.name)
+        var out: [String] = []
+        if name != original.name {
+            out.append("EXEC sp_rename \(d.literal(original.schema + "." + original.name)), \(d.literal(name))")
+            qt = d.qualified(schema: schema, name: name)
+        }
+        let (added, dropped, kept) = diff(original)
+        let pkChanged = original.pkIDs != pkIDs
+        if pkChanged, let pkName = original.primaryKeyName { out.append("ALTER TABLE \(qt) DROP CONSTRAINT \(d.quote(pkName))") }
+        for c in dropped { out.append("ALTER TABLE \(qt) DROP COLUMN \(d.quote(c.name))") }
+        for (o, n) in kept {
+            if o.name != n.name {
+                out.append("EXEC sp_rename \(d.literal("\(schema).\(name).\(o.name)")), \(d.literal(n.name)), 'COLUMN'")
+            }
+            if o.type != n.type || o.nullable != n.nullable {
+                out.append("ALTER TABLE \(qt) ALTER COLUMN \(d.quote(n.name)) \(n.type) \(n.nullable ? "NULL" : "NOT NULL")")
+            }
+            if o.defaultValue != n.defaultValue, !n.defaultValue.isEmpty {
+                out.append("ALTER TABLE \(qt) ADD DEFAULT \(n.defaultValue) FOR \(d.quote(n.name))")
+            }
+        }
+        for c in added { out.append("ALTER TABLE \(qt) ADD \(columnDefinition(c, dialect: d))") }
+        if pkChanged, !pkNames.isEmpty {
+            out.append("ALTER TABLE \(qt) ADD PRIMARY KEY (\(pkNames.map { d.quote($0) }.joined(separator: ", ")))")
+        }
+        return out
+    }
+
     private func sqliteAlter(from original: TableDesign) -> [String] {
         let d = SQLDialect.sqlite
         let (added, dropped, kept) = diff(original)
@@ -253,10 +326,10 @@ public struct TableDesign: Sendable, Equatable {
 
     /// Applies DDL; transactional where the database supports it (PostgreSQL, SQLite).
     public static func apply(_ statements: [String], on c: any DatabaseConnection) async throws {
-        let transactional = c.dialect == .postgres || c.dialect == .sqlite
+        let transactional = c.dialect == .postgres || c.dialect == .sqlite || c.dialect == .sqlserver
         // Must be outside a transaction to take effect (table rebuilds drop and recreate tables).
         if c.dialect == .sqlite { _ = try await c.execute("PRAGMA foreign_keys = OFF") }
-        if transactional { _ = try await c.execute("BEGIN") }
+        if transactional { _ = try await c.execute(c.dialect.beginTransaction) }
         do {
             for sql in statements { _ = try await c.execute(sql) }
             if transactional { _ = try await c.execute("COMMIT") }
@@ -277,7 +350,13 @@ public struct TableDesign: Sendable, Equatable {
              "timestamp", "blob"]
         case .sqlite:
             ["INTEGER", "REAL", "TEXT", "BLOB", "NUMERIC"]
-        case .mongodb:
+        case .clickhouse:
+            ["UInt64", "Int64", "Int32", "UInt8", "Float64", "Decimal(18,2)", "String", "LowCardinality(String)", "UUID",
+             "Date", "DateTime", "DateTime64(3)", "Bool", "Array(String)"]
+        case .sqlserver:
+            ["int IDENTITY(1,1)", "bigint", "int", "smallint", "bit", "decimal(18,2)", "float", "nvarchar(255)",
+             "nvarchar(max)", "varchar(255)", "uniqueidentifier", "date", "datetime2", "datetimeoffset", "varbinary(max)"]
+        case .mongodb, .redis:
             []
         }
     }

@@ -28,6 +28,7 @@ public enum ConnectionURL {
         case "postgres", "postgresql", "pgsql": dialect = .postgres
         case "mysql", "mariadb", "mysqlx": dialect = .mysql
         case "mongodb", "mongodb+srv": dialect = .mongodb
+        case "clickhouse", "ch": dialect = .clickhouse
         case "sqlite", "sqlite3", "file":
             let path = String(text[schemeEnd.upperBound...])
             return path.isEmpty ? nil : sqlite(path: path.removingPercentEncoding ?? path)

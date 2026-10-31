@@ -153,6 +153,22 @@ public struct CSVImport: Sendable {
             case .text: "string"
             }
         }
+        if dialect == .clickhouse {
+            return switch t {
+            case .integer: "Int64"
+            case .real: "Float64"
+            case .boolean: "Bool"
+            case .text: "String"
+            }
+        }
+        if dialect == .sqlserver {
+            return switch t {
+            case .integer: "bigint"
+            case .real: "float"
+            case .boolean: "bit"
+            case .text: "nvarchar(max)"
+            }
+        }
         return switch (t, dialect) {
         case (.integer, .sqlite): "INTEGER"
         case (.integer, _): "BIGINT"
@@ -163,7 +179,7 @@ public struct CSVImport: Sendable {
         case (.boolean, _): "BOOLEAN"
         case (.text, .mysql): "TEXT"
         case (.text, _): "TEXT"
-        case (_, .mongodb): ""
+        default: ""
         }
     }
 
@@ -215,7 +231,7 @@ public struct CSVImport: Sendable {
             }
             if let t = types?[i], t == .boolean, Self.isBool(raw) {
                 let yes = raw.lowercased() == "true"
-                return dialect == .sqlite ? (yes ? "1" : "0") : (yes ? "TRUE" : "FALSE")
+                return dialect == .sqlite || dialect == .sqlserver ? (yes ? "1" : "0") : (yes ? "TRUE" : "FALSE")
             }
             return dialect.literal(raw)
         }
@@ -237,14 +253,14 @@ public struct CSVImport: Sendable {
         _ statements: [String], on c: any DatabaseConnection, progress: @Sendable (Double) async -> Void = { _ in }
     ) async throws -> Int {
         var inserted = 0
-        if c.dialect == .mongodb {  // no multi-statement transactions on standalone servers
+        if !c.dialect.supportsTransactions {  // MongoDB standalone, ClickHouse
             for (i, sql) in statements.enumerated() {
                 inserted += try await c.execute(sql).affectedRows ?? 0
                 await progress(Double(i + 1) / Double(statements.count))
             }
             return inserted
         }
-        _ = try await c.execute(c.dialect == .mysql ? "START TRANSACTION" : "BEGIN")
+        _ = try await c.execute(c.dialect.beginTransaction)
         do {
             for (i, sql) in statements.enumerated() {
                 let r = try await c.execute(sql)

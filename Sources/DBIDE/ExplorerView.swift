@@ -344,6 +344,9 @@ struct DialectIcon: View {
             case .mysql: ("M", .orange)
             case .sqlite: ("S", .teal)
             case .mongodb: ("Mg", .green)
+            case .clickhouse: ("CH", .yellow)
+            case .sqlserver: ("SQ", .red)
+            case .redis: ("R", Color(red: 0.86, green: 0.2, blue: 0.15))
             }
         Text(letter)
             .font(.system(size: letter.count > 1 ? 8 : 10, weight: .bold, design: .rounded))
