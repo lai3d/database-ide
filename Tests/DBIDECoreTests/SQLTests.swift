@@ -167,3 +167,13 @@ import Testing
         await conn.close()
     }
 }
+
+@Suite struct ResultStatsTests {
+    @Test func aggregates() {
+        let s = ResultStats([.integer(2), .real(3.5), .text("4.50"), .null, .text("x")])
+        #expect(s.count == 5 && s.nonNull == 4 && s.numeric == 3)
+        #expect(s.sum == 10 && s.min == 2 && s.max == 4.5)
+        #expect(s.summary == "5 selected · 1 null · sum 10 · avg 3.3333 · min 2 · max 4.5")
+        #expect(ResultStats([.text("a")]).summary == "1 selected")
+    }
+}

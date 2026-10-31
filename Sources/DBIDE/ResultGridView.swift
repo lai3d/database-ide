@@ -17,6 +17,10 @@ struct GridSource {
     /// Non-nil makes cells editable.
     var onEdit: ((Int, Int, SQLValue) -> Void)? = nil
     var onDeleteRows: ((IndexSet) -> Void)? = nil
+    /// Client-side quick filter: rows containing this text in any column.
+    var filter: String = ""
+    /// Selected model rows and the last clicked column (model index).
+    var onSelectionChange: ((_ rows: [Int], _ column: Int?) -> Void)? = nil
 
     static func readOnly(_ result: QueryResult, dialect: SQLDialect, version: Int) -> GridSource {
         GridSource(
@@ -49,6 +53,11 @@ struct ResultGridView: NSViewRepresentable {
         table.doubleAction = #selector(Coordinator.doubleClick(_:))
         table.menu = context.coordinator.makeMenu()
         table.menu?.delegate = context.coordinator
+        table.action = #selector(Coordinator.singleClick(_:))
+        let headerMenu = NSMenu()
+        headerMenu.delegate = context.coordinator
+        context.coordinator.headerMenu = headerMenu
+        table.headerView?.menu = headerMenu
 
         let scroll = NSScrollView()
         scroll.documentView = table
@@ -78,10 +87,11 @@ struct ResultGridView: NSViewRepresentable {
             let old = source
             source = new
             if force || new.columns != columnSignature {
+                if new.columns != columnSignature { hidden = [] }
                 columnSignature = new.columns
                 rebuildColumns(table, new)
             }
-            if force || old?.version != new.version || old?.rowCount != new.rowCount {
+            if force || old?.version != new.version || old?.rowCount != new.rowCount || old?.filter != new.filter {
                 resort()
                 table.reloadData()
             }
@@ -94,7 +104,7 @@ struct ResultGridView: NSViewRepresentable {
             rowCol.width = max(36, CGFloat(String(s.rowCount).count) * 8 + 14)
             rowCol.isEditable = false
             table.addTableColumn(rowCol)
-            for (i, col) in s.columns.enumerated() {
+            for (i, col) in s.columns.enumerated() where !hidden.contains(i) {
                 let c = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(String(i)))
                 c.title = col.name
                 c.headerToolTip = "\(col.name): \(col.typeName)"
@@ -116,7 +126,14 @@ struct ResultGridView: NSViewRepresentable {
 
         private func resort() {
             guard let s = source else { return }
-            order = Array(0..<s.rowCount)
+            let needle = s.filter.trimmingCharacters(in: .whitespaces).lowercased()
+            if needle.isEmpty {
+                order = Array(0..<s.rowCount)
+            } else {
+                order = (0..<s.rowCount).filter { r in
+                    (0..<s.columns.count).contains { s.value(r, $0).displayString.lowercased().contains(needle) }
+                }
+            }
             guard let sd = table?.sortDescriptors.first, let key = sd.key, let col = Int(key) else { return }
             let asc = sd.ascending
             order.sort { a, b in
@@ -129,7 +146,96 @@ struct ResultGridView: NSViewRepresentable {
 
         // MARK: Data source
 
-        func numberOfRows(in tableView: NSTableView) -> Int { source?.rowCount ?? 0 }
+        func numberOfRows(in tableView: NSTableView) -> Int { order.count }
+
+        // MARK: Selection & header menu
+
+        weak var headerMenu: NSMenu?
+        var hidden: Set<Int> = []
+        private var lastColumn: Int?
+        private var headerColumn: Int?
+
+        @objc func singleClick(_ sender: NSTableView) {
+            let col = sender.clickedColumn
+            if col > 0, let c = Int(sender.tableColumns[col].identifier.rawValue) { lastColumn = c }
+            notifySelection()
+        }
+
+        func tableViewSelectionDidChange(_ notification: Notification) {
+            // Re-render visible cells so text colors follow the selection highlight.
+            if let table {
+                let visible = table.rows(in: table.visibleRect)
+                if visible.length > 0 {
+                    table.reloadData(forRowIndexes: IndexSet(integersIn: visible.location..<NSMaxRange(visible)),
+                                     columnIndexes: IndexSet(integersIn: 0..<table.numberOfColumns))
+                }
+            }
+            notifySelection()
+        }
+
+        private func notifySelection() {
+            guard let table, let s = source else { return }
+            s.onSelectionChange?(table.selectedRowIndexes.map { modelRow($0) }, lastColumn)
+        }
+
+        private func buildHeaderMenu(_ menu: NSMenu) {
+            guard let table, let header = table.headerView, let s = source else { return }
+            let point = header.convert(header.window?.mouseLocationOutsideOfEventStream ?? .zero, from: nil)
+            let index = header.column(at: point)
+            headerColumn = index > 0 ? Int(table.tableColumns[index].identifier.rawValue) : nil
+            func item(_ title: String, _ action: Selector) -> NSMenuItem {
+                let i = NSMenuItem(title: title, action: action, keyEquivalent: "")
+                i.target = self
+                return i
+            }
+            if let c = headerColumn {
+                let name = NSMenuItem(title: s.columns[c].name + (s.columns[c].typeName.isEmpty ? "" : "  ·  " + s.columns[c].typeName), action: nil, keyEquivalent: "")
+                name.isEnabled = false
+                menu.addItem(name)
+                menu.addItem(.separator())
+                menu.addItem(item("Sort Ascending", #selector(sortAscending(_:))))
+                menu.addItem(item("Sort Descending", #selector(sortDescending(_:))))
+                menu.addItem(.separator())
+                menu.addItem(item("Copy Column Name", #selector(copyColumnName(_:))))
+                menu.addItem(item("Copy Column Values", #selector(copyColumnValues(_:))))
+                menu.addItem(.separator())
+                menu.addItem(item("Hide Column", #selector(hideColumn(_:))))
+            }
+            if !hidden.isEmpty { menu.addItem(item("Show All Columns (\(hidden.count) hidden)", #selector(showAllColumns(_:)))) }
+        }
+
+        @objc func sortAscending(_ sender: Any?) { sort(ascending: true) }
+        @objc func sortDescending(_ sender: Any?) { sort(ascending: false) }
+        private func sort(ascending: Bool) {
+            guard let c = headerColumn, let table else { return }
+            table.sortDescriptors = [NSSortDescriptor(key: String(c), ascending: ascending)]
+        }
+
+        @objc func copyColumnName(_ sender: Any?) {
+            guard let c = headerColumn, let s = source else { return }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(s.columns[c].name, forType: .string)
+        }
+
+        @objc func copyColumnValues(_ sender: Any?) {
+            guard let c = headerColumn, let s = source else { return }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(order.map { s.value($0, c).exportString }.joined(separator: "\n"), forType: .string)
+        }
+
+        @objc func hideColumn(_ sender: Any?) {
+            guard let c = headerColumn, let table, let s = source else { return }
+            hidden.insert(c)
+            rebuildColumns(table, s)
+            table.reloadData()
+        }
+
+        @objc func showAllColumns(_ sender: Any?) {
+            guard let table, let s = source else { return }
+            hidden = []
+            rebuildColumns(table, s)
+            table.reloadData()
+        }
 
         func tableView(_ tableView: NSTableView, sortDescriptorsDidChange oldDescriptors: [NSSortDescriptor]) {
             resort()
@@ -169,6 +275,8 @@ struct ResultGridView: NSViewRepresentable {
             if v.isNull {
                 attrs[.foregroundColor] = NSColor.tertiaryLabelColor
                 attrs[.font] = NSFontManager.shared.convert(EditorTheme.gridFont, toHaveTrait: .italicFontMask)
+            } else if tableView.isRowSelected(row) {
+                attrs[.foregroundColor] = NSColor.alternateSelectedControlTextColor
             } else {
                 attrs[.foregroundColor] = v.isNumeric ? NSColor.systemBlue : NSColor.labelColor
             }
@@ -304,6 +412,10 @@ struct ResultGridView: NSViewRepresentable {
 
         func menuNeedsUpdate(_ menu: NSMenu) {
             menu.removeAllItems()
+            if menu === headerMenu {
+                buildHeaderMenu(menu)
+                return
+            }
             func item(_ title: String, _ action: Selector, _ key: String = "") -> NSMenuItem {
                 let i = NSMenuItem(title: title, action: action, keyEquivalent: key)
                 i.target = self

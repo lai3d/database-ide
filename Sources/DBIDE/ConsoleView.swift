@@ -215,7 +215,7 @@ private struct ResultsPanel: View {
             } else if let r = console.results.first(where: { $0.id == console.selectedResultID }), showJSON, let docs = r.result.documents {
                 DocumentsView(documents: docs)
             } else if let r = console.results.first(where: { $0.id == console.selectedResultID }) {
-                ResultGridView(source: .readOnly(r.result, dialect: console.dialect, version: r.id.hashValue &+ r.result.rows.count))
+                ResultArea(result: r.result, dialect: console.dialect, version: r.id.hashValue &+ r.result.rows.count)
                     .id(r.id)
                 if r.result.truncated {
                     HStack(spacing: 10) {
@@ -254,6 +254,103 @@ private struct ResultsPanel: View {
                 }
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// Result grid with quick filter, record (transposed) view and selection aggregates.
+struct ResultArea: View {
+    let result: QueryResult
+    let dialect: SQLDialect
+    let version: Int
+    @State private var filter = ""
+    @State private var recordView = false
+    @State private var selectedRows: [Int] = []
+    @State private var column: Int?
+    @State private var recordIndex = 0
+
+    private var visibleCount: Int {
+        let needle = filter.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !needle.isEmpty else { return result.rows.count }
+        return result.rows.filter { $0.contains { $0.displayString.lowercased().contains(needle) } }.count
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "line.3.horizontal.decrease.circle").foregroundStyle(.secondary)
+                TextField("Filter rows", text: $filter)
+                    .textFieldStyle(.plain)
+                    .frame(maxWidth: 220)
+                if !filter.isEmpty {
+                    Text("\(visibleCount) of \(result.rows.count)").foregroundStyle(.secondary)
+                }
+                Spacer()
+                if let stats { Text(stats.summary).foregroundStyle(.secondary).lineLimit(1) }
+                Picker("", selection: $recordView) {
+                    Image(systemName: "tablecells").tag(false)
+                    Image(systemName: "list.bullet.rectangle").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                .help("Grid / record view (one row, transposed)")
+            }
+            .font(.caption)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            Divider()
+            if recordView {
+                recordBody
+            } else {
+                ResultGridView(source: gridSource)
+            }
+        }
+    }
+
+    private var gridSource: GridSource {
+        var g = GridSource.readOnly(result, dialect: dialect, version: version)
+        g.filter = filter
+        g.onSelectionChange = { rows, col in
+            selectedRows = rows
+            column = col
+            if let first = rows.first { recordIndex = first }
+        }
+        return g
+    }
+
+    private func transposedSource(_ r: QueryResult, index: Int) -> GridSource {
+        var g = GridSource.readOnly(r, dialect: dialect, version: version &+ index &* 7919)
+        g.filter = filter
+        return g
+    }
+
+    private var stats: ResultStats? {
+        guard selectedRows.count > 1, let c = column, c < result.columns.count else { return nil }
+        return ResultStats(selectedRows.compactMap { $0 < result.rows.count ? result.rows[$0][c] : nil })
+    }
+
+    @ViewBuilder
+    private var recordBody: some View {
+        let index = min(recordIndex, max(0, result.rows.count - 1))
+        HStack {
+            Button { recordIndex = max(0, index - 1) } label: { Image(systemName: "chevron.left") }
+                .disabled(index == 0)
+            Text(result.rows.isEmpty ? "No rows" : "Row \(index + 1) of \(result.rows.count)").monospacedDigit()
+            Button { recordIndex = min(result.rows.count - 1, index + 1) } label: { Image(systemName: "chevron.right") }
+                .disabled(index >= result.rows.count - 1)
+            Spacer()
+        }
+        .buttonStyle(.borderless)
+        .font(.caption)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        if !result.rows.isEmpty {
+            let row = result.rows[index]
+            let transposed = QueryResult(
+                columns: [ResultColumn(name: "column", typeName: ""), ResultColumn(name: "type", typeName: ""), ResultColumn(name: "value", typeName: "")],
+                rows: result.columns.enumerated().map { i, c in [.text(c.name), .text(c.typeName), i < row.count ? row[i] : .null] })
+            ResultGridView(source: transposedSource(transposed, index: index))
+        }
     }
 }
 
