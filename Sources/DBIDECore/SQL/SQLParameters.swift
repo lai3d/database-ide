@@ -11,6 +11,7 @@ public enum SQLParameters {
     }
 
     public static func occurrences(in sql: String, dialect: SQLDialect) -> [Occurrence] {
+        if dialect == .mongodb { return [] }
         let ns = sql as NSString
         var positional = 0
         return SQLLexer.tokenize(sql, dialect: dialect).compactMap { t -> Occurrence? in

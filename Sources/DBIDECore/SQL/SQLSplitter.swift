@@ -17,6 +17,7 @@ public struct SQLStatement: Sendable, Equatable {
 /// and MySQL `DELIMITER` lines.
 public enum SQLSplitter {
     public static func split(_ script: String, dialect: SQLDialect) -> [SQLStatement] {
+        if dialect == .mongodb { return MongoShellParser.split(script) }
         let s = Array(script.utf16)
         let n = s.count
         var statements: [SQLStatement] = []

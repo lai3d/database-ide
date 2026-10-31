@@ -126,6 +126,7 @@ final class ConsoleModel: Identifiable {
         switch conn.dialect {
         case .postgres: _ = try await conn.execute("SET search_path TO \(conn.dialect.quote(schema))")
         case .mysql: _ = try await conn.execute("USE \(conn.dialect.quote(schema))")
+        case .mongodb: (conn as? MongoConnection)?.database = schema
         case .sqlite: break
         }
     }

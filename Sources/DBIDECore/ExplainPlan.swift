@@ -55,11 +55,13 @@ public enum Explainer {
     public static func explain(_ sql: String, analyze: Bool, on c: any DatabaseConnection) async throws -> ExplainResult {
         let sql = sql.trimmingCharacters(in: CharacterSet(charactersIn: "; \n\t"))
         let readOnly = ["SELECT", "WITH", "VALUES", "TABLE"].contains(SQLLexer.leadingKeywords(sql, count: 1).uppercased())
-        let wrap = analyze && !readOnly && c.dialect != .sqlite && !c.inTransaction
+        let wrap = analyze && !readOnly && c.dialect.isSQL && c.dialect != .sqlite && !c.inTransaction
         if wrap { _ = try await c.execute(c.dialect == .mysql ? "START TRANSACTION" : "BEGIN") }
         do {
             let result: ExplainResult
             switch c.dialect {
+            case .mongodb:
+                result = try await explainMongo(sql, analyze: analyze, on: c)
             case .postgres:
                 let opts = analyze ? "FORMAT JSON, ANALYZE, BUFFERS" : "FORMAT JSON"
                 let json = try await c.strings("EXPLAIN (\(opts)) \(sql)").joined()
@@ -177,6 +179,53 @@ public enum Explainer {
             node.loops = parts[3].split(separator: "=").last.flatMap { Double($0) }
         }
         return node
+    }
+
+    // MARK: MongoDB
+
+    static func explainMongo(_ text: String, analyze: Bool, on c: any DatabaseConnection) async throws -> ExplainResult {
+        guard case .collection(_, let method, _, let modifiers) = try MongoShellParser.parse(text),
+            ["find", "findOne", "aggregate"].contains(method), !modifiers.contains(where: { $0.name == "explain" })
+        else { throw DatabaseError("Explain works on find() and aggregate()") }
+        let body = text.trimmingCharacters(in: CharacterSet(charactersIn: "; \n\t"))
+        let r = try await c.execute(body + ".explain('\(analyze ? "executionStats" : "queryPlanner")')")
+        guard let doc = r.documents?.first else { throw DatabaseError("No explain output") }
+        return parseMongoExplain(doc, analyzed: analyze)
+    }
+
+    static func parseMongoExplain(_ doc: BSONDocument, analyzed: Bool) -> ExplainResult {
+        // find: queryPlanner / executionStats at the top; aggregate: inside stages[0].$cursor.
+        var d = doc
+        if let first = doc["stages"]?.array?.first?.document?["$cursor"]?.document { d = first }
+        let planner = d["queryPlanner"]?.document ?? [:]
+        var winning = planner["winningPlan"]?.document ?? [:]
+        if let qp = winning["queryPlan"]?.document { winning = qp }  // slot-based engine
+        let stats = d["executionStats"]?.document
+        func node(_ s: BSONDocument, _ exec: BSONDocument?) -> PlanNode {
+            var title = s["stage"]?.string ?? "?"
+            if let idx = s["indexName"]?.string { title += " using \(idx)" }
+            var details: [String] = []
+            if let k = s["keyPattern"] { details.append("keys: \(k.shellString)") }
+            if let f = s["filter"] { details.append("filter: \(f.shellString)") }
+            if let b = s["indexBounds"] { details.append("bounds: \(b.shellString)") }
+            if let e = exec {
+                let examined = [e["keysExamined"].flatMap(\.int).map { "keys examined \($0)" }, e["docsExamined"].flatMap(\.int).map { "docs examined \($0)" }].compactMap { $0 }
+                if !examined.isEmpty { details.append(examined.joined(separator: ", ")) }
+            }
+            let inputs = (s["inputStage"]?.document.map { [$0] } ?? []) + (s["inputStages"]?.array?.compactMap(\.document) ?? [])
+            let execInputs = (exec?["inputStage"]?.document.map { [$0] } ?? []) + (exec?["inputStages"]?.array?.compactMap(\.document) ?? [])
+            let children = inputs.enumerated().map { node($0.element, $0.offset < execInputs.count ? execInputs[$0.offset] : nil) }
+            return PlanNode(
+                title: title, details: details,
+                actualTime: exec?["executionTimeMillisEstimate"].flatMap(\.int).map(Double.init),
+                actualRows: exec?["nReturned"].flatMap(\.int).map(Double.init), loops: exec == nil ? nil : 1,
+                children: children)
+        }
+        var root = node(winning, stats?["executionStages"]?.document)
+        if let ns = planner["namespace"]?.string { root.details.insert("namespace: \(ns)", at: 0) }
+        return ExplainResult(
+            root: root, analyzed: analyzed && stats != nil, planningTime: nil,
+            executionTime: stats?["executionTimeMillis"].flatMap(\.int).map(Double.init), raw: doc.prettyString)
     }
 
     // MARK: SQLite

@@ -62,8 +62,9 @@ public enum SQLLexer {
             }
             if isIdentStart(c) {
                 while i < n, isIdentPart(s[i]) { i += 1 }
-                let word = String(utf16CodeUnits: Array(s[start..<i]), count: i - start).uppercased()
-                let kind: SQLTokenKind = SQLKeywords.all.contains(word) ? .keyword : .identifier
+                let raw = String(utf16CodeUnits: Array(s[start..<i]), count: i - start)
+                let isKeyword = dialect == .mongodb ? SQLKeywords.mongo.contains(raw) : SQLKeywords.all.contains(raw.uppercased())
+                let kind: SQLTokenKind = isKeyword ? .keyword : .identifier
                 tokens.append(SQLToken(kind: kind, location: start, length: i - start))
                 continue
             }
@@ -75,11 +76,11 @@ public enum SQLLexer {
             // Bind parameters: ?, :name, @var, $1 (but not the `::` cast operator).
             let next: UInt16 = i + 1 < n ? s[i + 1] : 0
             let afterColon = i > 0 && s[i - 1] == ch(":")
-            let isParam =
+            let isParam = dialect != .mongodb && (
                 c == ch("?")
                 || (c == ch(":") && !afterColon && isIdentStart(next))
                 || (c == ch("@") && isIdentPart(next))
-                || (c == ch("$") && isDigit(next))
+                || (c == ch("$") && isDigit(next)))
             if isParam {
                 i += 1
                 while i < n, isIdentPart(s[i]) { i += 1 }
@@ -98,6 +99,20 @@ public enum SQLLexer {
         let n = s.count
         let c = s[i]
         let next: UInt16 = i + 1 < n ? s[i + 1] : 0
+        if dialect == .mongodb {
+            if c == ch("/") && next == ch("/") {
+                var j = i
+                while j < n, s[j] != 10 { j += 1 }
+                return j
+            }
+            if c == ch("/") && next == ch("*") {
+                var j = i + 2
+                while j + 1 < n, !(s[j] == ch("*") && s[j + 1] == ch("/")) { j += 1 }
+                return min(n, j + 2)
+            }
+            if c == ch("'") || c == ch("\"") || c == ch("`") { return quoted(s, i, quote: c, backslash: true) }
+            return nil
+        }
 
         // -- line comment, and # in MySQL
         if (c == ch("-") && next == ch("-")) || (c == ch("#") && dialect == .mysql) {

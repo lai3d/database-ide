@@ -24,8 +24,10 @@ public struct TableEdits: Sendable, Equatable {
     /// DML for the pending changes, in execution order: deletes, updates, inserts.
     /// Existing rows are identified by `primaryKey` using their original values.
     public func statements(
-        table: TableInfo, dialect: SQLDialect, columns: [ResultColumn], rows: [[SQLValue]], primaryKey: [String]
+        table: TableInfo, dialect: SQLDialect, columns: [ResultColumn], rows: [[SQLValue]], primaryKey: [String],
+        documents: [BSONDocument]? = nil
     ) throws -> [String] {
+        if dialect == .mongodb { return try mongoStatements(table: table, columns: columns, documents: documents ?? []) }
         let qt = dialect.qualified(schema: table.schema, name: table.name)
         let names = columns.map(\.name)
         func lit(_ v: SQLValue) -> String { ResultExport.sqlLiteral(v, dialect: dialect) }
@@ -60,10 +62,44 @@ public struct TableEdits: Sendable, Equatable {
         return out
     }
 
+    /// MongoDB: updateOne / deleteOne by _id (with its original BSON value), insertOne for new rows.
+    func mongoStatements(table: TableInfo, columns: [ResultColumn], documents: [BSONDocument]) throws -> [String] {
+        let coll = "db.getCollection(\(BSONFormatter.quote(table.name)))"
+        let names = columns.map(\.name)
+        func idFilter(_ row: Int) throws -> String {
+            guard row < documents.count, let id = documents[row]["_id"] else { throw DatabaseError("Document has no _id") }
+            return BSONValue.document(["_id": id]).shellString
+        }
+        var out: [String] = []
+        for row in deletedRows.sorted() { out.append("\(coll).deleteOne(\(try idFilter(row)))") }
+        for (row, cols) in updates.sorted(by: { $0.key < $1.key }) where !deletedRows.contains(row) {
+            var set = BSONDocument()
+            for (c, v) in cols.sorted(by: { $0.key < $1.key }) where names[c] != "_id" {
+                let original = row < documents.count ? documents[row][names[c]] : nil
+                if v.isNull && original == nil { continue }
+                set[names[c]] = MongoResults.bson(v, like: original)
+            }
+            if set.isEmpty { continue }
+            out.append("\(coll).updateOne(\(try idFilter(row)), { $set: \(BSONValue.document(set).shellString) })")
+        }
+        for row in insertedRows {
+            let doc = BSONDocument(zip(names, row).filter { !$0.1.isNull }.map { ($0.0, MongoResults.bson($0.1, like: nil)) })
+            out.append("\(coll).insertOne(\(BSONValue.document(doc).shellString))")
+        }
+        return out
+    }
+
     /// Runs `statements` in a transaction; every statement must change exactly one row,
     /// otherwise everything is rolled back.
     public static func apply(_ statements: [String], on connection: any DatabaseConnection) async throws {
         guard !statements.isEmpty else { return }
+        if connection.dialect == .mongodb {  // no multi-document transaction on standalone servers
+            for sql in statements {
+                let r = try await connection.execute(sql)
+                if let n = r.affectedRows, n != 1 { throw DatabaseError("Expected to change 1 document but changed \(n).\n\(sql)") }
+            }
+            return
+        }
         _ = try await connection.execute(connection.dialect == .mysql ? "START TRANSACTION" : "BEGIN")
         do {
             for sql in statements {

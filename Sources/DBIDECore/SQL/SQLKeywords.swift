@@ -17,4 +17,10 @@ public enum SQLKeywords {
         """.split(separator: " ").map(String.init)
 
     public static let all: Set<String> = Set(list)
+
+    /// MongoDB shell words highlighted as keywords (case-sensitive).
+    public static let mongo: Set<String> = [
+        "db", "show", "use", "new", "true", "false", "null", "undefined", "ObjectId", "ISODate", "Date", "NumberLong",
+        "NumberInt", "NumberDecimal", "Decimal128", "UUID", "Long", "Int32", "Double", "Timestamp", "MinKey", "MaxKey",
+    ]
 }

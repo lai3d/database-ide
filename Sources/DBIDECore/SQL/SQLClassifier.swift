@@ -13,6 +13,7 @@ public enum SQLClassifier {
     ]
 
     public static func isReadOnly(_ sql: String, dialect: SQLDialect = .postgres) -> Bool {
+        if dialect == .mongodb { return isMongoReadOnly(sql) }
         let ns = sql as NSString
         let words = SQLLexer.tokenize(sql, dialect: dialect)
             .filter { $0.kind == .keyword || $0.kind == .identifier }
@@ -35,6 +36,31 @@ public enum SQLClassifier {
             return true
         default:
             return true
+        }
+    }
+
+    static let mongoReads: Set<String> = [
+        "find", "findOne", "countDocuments", "estimatedDocumentCount", "count", "distinct", "getIndexes", "stats",
+        "getCollectionNames", "getCollectionInfos", "serverStatus", "hostInfo", "currentOp", "getUsers", "version", "getName",
+    ]
+
+    static func isMongoReadOnly(_ text: String) -> Bool {
+        guard let st = try? MongoShellParser.parse(text) else { return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        switch st {
+        case .show, .use: return true
+        case .database(let method, let args):
+            if method == "runCommand" || method == "adminCommand" {
+                let name = args.first?.document?.keys.first ?? args.first?.string ?? ""
+                return ["ping", "buildInfo", "hello", "isMaster", "listDatabases", "listCollections", "dbStats", "collStats",
+                        "serverStatus", "connectionStatus", "count", "find", "aggregate", "explain", "usersInfo"].contains(name)
+                    && !(args.first?.document?["pipeline"]?.array?.contains { $0.document?["$out"] != nil || $0.document?["$merge"] != nil } ?? false)
+            }
+            return mongoReads.contains(method)
+        case .collection(_, let method, let args, _):
+            if method == "aggregate" {
+                return !(args.first?.array?.contains { $0.document?["$out"] != nil || $0.document?["$merge"] != nil } ?? false)
+            }
+            return mongoReads.contains(method)
         }
     }
 }

@@ -145,7 +145,15 @@ public struct CSVImport: Sendable {
     }
 
     public static func sqlType(_ t: ColumnType, dialect: SQLDialect) -> String {
-        switch (t, dialect) {
+        if dialect == .mongodb {
+            return switch t {
+            case .integer: "int/long"
+            case .real: "double"
+            case .boolean: "bool"
+            case .text: "string"
+            }
+        }
+        return switch (t, dialect) {
         case (.integer, .sqlite): "INTEGER"
         case (.integer, _): "BIGINT"
         case (.real, .postgres): "DOUBLE PRECISION"
@@ -155,10 +163,12 @@ public struct CSVImport: Sendable {
         case (.boolean, _): "BOOLEAN"
         case (.text, .mysql): "TEXT"
         case (.text, _): "TEXT"
+        case (_, .mongodb): ""
         }
     }
 
     public func createTableSQL(schema: String?, table: String, types: [ColumnType], dialect: SQLDialect) -> String {
+        if dialect == .mongodb { return "db.createCollection(\(BSONFormatter.quote(table)))" }
         let cols = header.enumerated().map { i, name in
             "    \(dialect.quote(name)) \(Self.sqlType(i < types.count ? types[i] : .text, dialect: dialect))"
         }
@@ -172,6 +182,30 @@ public struct CSVImport: Sendable {
     ) -> [String] {
         let used = mapping.enumerated().compactMap { i, target in target.map { (i, $0) } }
         guard !used.isEmpty else { return [] }
+        if dialect == .mongodb {
+            func value(_ raw: String, _ i: Int) -> BSONValue {
+                let t = raw.trimmingCharacters(in: .whitespaces)
+                if raw.isEmpty { return emptyAsNull ? .null : .string("") }
+                switch types?[i] {
+                case .integer?: if let v = Int64(t) { return Int32(exactly: v).map(BSONValue.int32) ?? .int64(v) }
+                case .real?: if let d = Double(t) { return .double(d) }
+                case .boolean?: if Self.isBool(t) { return .bool(t.lowercased() == "true") }
+                default: break
+                }
+                return .string(raw)
+            }
+            var out: [String] = []
+            var start = 0
+            while start < rows.count {
+                let chunk = rows[start..<min(rows.count, start + batchSize)]
+                let docs = chunk.map { row in
+                    BSONValue.document(BSONDocument(used.map { ($0.1, value($0.0 < row.count ? row[$0.0] : "", $0.0)) })).shellString
+                }
+                out.append("db.getCollection(\(BSONFormatter.quote(table))).insertMany([\n" + docs.joined(separator: ",\n") + "\n])")
+                start += batchSize
+            }
+            return out
+        }
         let qt = dialect.qualified(schema: schema, name: table)
         let cols = used.map { dialect.quote($0.1) }.joined(separator: ", ")
         func literal(_ raw: String, _ i: Int) -> String {
@@ -203,6 +237,13 @@ public struct CSVImport: Sendable {
         _ statements: [String], on c: any DatabaseConnection, progress: @Sendable (Double) async -> Void = { _ in }
     ) async throws -> Int {
         var inserted = 0
+        if c.dialect == .mongodb {  // no multi-statement transactions on standalone servers
+            for (i, sql) in statements.enumerated() {
+                inserted += try await c.execute(sql).affectedRows ?? 0
+                await progress(Double(i + 1) / Double(statements.count))
+            }
+            return inserted
+        }
         _ = try await c.execute(c.dialect == .mysql ? "START TRANSACTION" : "BEGIN")
         do {
             for (i, sql) in statements.enumerated() {

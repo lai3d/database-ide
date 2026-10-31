@@ -380,7 +380,10 @@ enum BSONFormatter {
 
     static func format(_ v: BSONValue, indent: String?) -> String {
         switch v {
-        case .double(let d): return number(d)
+        case .double(let d):
+            let n = number(d)
+            // Keep integral doubles distinguishable from ints when the text is parsed back.
+            return d.isFinite && !n.contains(".") && !n.contains("e") ? n + ".0" : n
         case .string(let s): return quote(s)
         case .document(let doc):
             if doc.isEmpty { return "{}" }

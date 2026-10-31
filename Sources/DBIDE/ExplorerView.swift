@@ -277,9 +277,10 @@ struct DialectIcon: View {
             case .postgres: ("P", .blue)
             case .mysql: ("M", .orange)
             case .sqlite: ("S", .teal)
+            case .mongodb: ("Mg", .green)
             }
         Text(letter)
-            .font(.system(size: 10, weight: .bold, design: .rounded))
+            .font(.system(size: letter.count > 1 ? 8 : 10, weight: .bold, design: .rounded))
             .foregroundStyle(.white)
             .frame(width: 16, height: 16)
             .background(RoundedRectangle(cornerRadius: 4).fill(color))

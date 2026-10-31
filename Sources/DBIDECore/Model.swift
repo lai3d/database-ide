@@ -75,13 +75,15 @@ public struct QueryResult: Sendable {
     /// True when more rows existed than were kept (see `maxRows`).
     public var truncated: Bool
     public var duration: TimeInterval
+    /// Raw documents for MongoDB results (the grid shows them flattened).
+    public var documents: [BSONDocument]?
 
     public var hasResultSet: Bool { !columns.isEmpty }
 
     public init(
         statement: String = "", columns: [ResultColumn] = [], rows: [[SQLValue]] = [],
         affectedRows: Int? = nil, message: String? = nil, truncated: Bool = false,
-        duration: TimeInterval = 0
+        duration: TimeInterval = 0, documents: [BSONDocument]? = nil
     ) {
         self.statement = statement
         self.columns = columns
@@ -90,6 +92,7 @@ public struct QueryResult: Sendable {
         self.message = message
         self.truncated = truncated
         self.duration = duration
+        self.documents = documents
     }
 
     /// One-line summary for the console log.
@@ -129,13 +132,17 @@ public struct DatabaseError: Error, LocalizedError, Sendable, Equatable {
 }
 
 public enum SQLDialect: String, Codable, Sendable, CaseIterable {
-    case sqlite, postgres, mysql
+    case sqlite, postgres, mysql, mongodb
+
+    /// SQL databases (MongoDB uses shell syntax instead).
+    public var isSQL: Bool { self != .mongodb }
 
     public var displayName: String {
         switch self {
         case .sqlite: "SQLite"
         case .postgres: "PostgreSQL"
         case .mysql: "MySQL"
+        case .mongodb: "MongoDB"
         }
     }
 
@@ -144,12 +151,14 @@ public enum SQLDialect: String, Codable, Sendable, CaseIterable {
         case .sqlite: 0
         case .postgres: 5432
         case .mysql: 3306
+        case .mongodb: 27017
         }
     }
 
     /// Quotes an identifier for this dialect.
     public func quote(_ identifier: String) -> String {
         switch self {
+        case .mongodb: identifier
         case .mysql: "`" + identifier.replacingOccurrences(of: "`", with: "``") + "`"
         default: "\"" + identifier.replacingOccurrences(of: "\"", with: "\"\"") + "\""
         }
@@ -157,12 +166,14 @@ public enum SQLDialect: String, Codable, Sendable, CaseIterable {
 
     /// Quotes a string literal for this dialect.
     public func literal(_ value: String) -> String {
+        if self == .mongodb { return BSONFormatter.quote(value) }
         var v = value.replacingOccurrences(of: "'", with: "''")
         if self == .mysql { v = v.replacingOccurrences(of: "\\", with: "\\\\") }
         return "'" + v + "'"
     }
 
     public func qualified(schema: String?, name: String) -> String {
+        if self == .mongodb { return name }
         guard let schema, !schema.isEmpty, !(self == .sqlite && schema == "main") else { return quote(name) }
         return quote(schema) + "." + quote(name)
     }

@@ -21,6 +21,10 @@ public struct DataSourceConfig: Codable, Sendable, Identifiable, Hashable {
     public var ssh: SSHConfig
     /// Ask before running statements that modify data or schema (for production data sources).
     public var confirmWrites: Bool
+    /// MongoDB: database holding the user's credentials (default "admin").
+    public var authSource: String
+    /// MongoDB: resolve `host` as a `mongodb+srv://` cluster name via DNS SRV.
+    public var srv: Bool
 
     public var tlsOptions: TLSOptions {
         TLSOptions(mode: sslMode, rootCertificatePath: sslRootCert.isEmpty ? nil : sslRootCert)
@@ -30,7 +34,7 @@ public struct DataSourceConfig: Codable, Sendable, Identifiable, Hashable {
         id: UUID = UUID(), name: String = "", dialect: SQLDialect = .postgres, host: String = "localhost",
         port: Int? = nil, user: String = "", database: String = "", filePath: String = "",
         readOnly: Bool = false, color: String? = nil, sslMode: SSLMode = .prefer, sslRootCert: String = "",
-        ssh: SSHConfig = SSHConfig(), confirmWrites: Bool = false
+        ssh: SSHConfig = SSHConfig(), confirmWrites: Bool = false, authSource: String = "", srv: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -46,10 +50,12 @@ public struct DataSourceConfig: Codable, Sendable, Identifiable, Hashable {
         self.sslRootCert = sslRootCert
         self.ssh = ssh
         self.confirmWrites = confirmWrites
+        self.authSource = authSource
+        self.srv = srv
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, dialect, host, port, user, database, filePath, readOnly, color, sslMode, sslRootCert, ssh, confirmWrites
+        case id, name, dialect, host, port, user, database, filePath, readOnly, color, sslMode, sslRootCert, ssh, confirmWrites, authSource, srv
     }
 
     /// Tolerates fields added in later versions being absent from saved state.
@@ -69,6 +75,8 @@ public struct DataSourceConfig: Codable, Sendable, Identifiable, Hashable {
         sslRootCert = try c.decodeIfPresent(String.self, forKey: .sslRootCert) ?? ""
         ssh = try c.decodeIfPresent(SSHConfig.self, forKey: .ssh) ?? SSHConfig()
         confirmWrites = try c.decodeIfPresent(Bool.self, forKey: .confirmWrites) ?? false
+        authSource = try c.decodeIfPresent(String.self, forKey: .authSource) ?? ""
+        srv = try c.decodeIfPresent(Bool.self, forKey: .srv) ?? false
     }
 
     public var displayName: String {
@@ -108,12 +116,14 @@ public struct DataSourceConfig: Codable, Sendable, Identifiable, Hashable {
                 host: h, port: p, user: user, password: password, database: database, tls: tls)
             if readOnly { _ = try await conn.execute("SET SESSION TRANSACTION READ ONLY") }
             return conn
+        case .mongodb:
+            return try await MongoConnection.connect(config: self, password: password)
         }
     }
 
     /// Where to open the socket: the server itself, or the local end of an SSH tunnel.
     /// Through a tunnel, TLS still checks the certificate against the real host name.
-    private func endpoint() async throws -> (String, Int, TLSOptions) {
+    func endpoint() async throws -> (String, Int, TLSOptions) {
         guard ssh.enabled else { return (host, port, tlsOptions) }
         guard !ssh.host.isEmpty else { throw DatabaseError("SSH host is empty") }
         let ssh = ssh, host = host, port = port

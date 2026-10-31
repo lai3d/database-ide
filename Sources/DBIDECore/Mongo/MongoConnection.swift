@@ -24,7 +24,7 @@ public final class MongoConnection: @unchecked Sendable {
         try await SerialWorker(label: "dbide.mongo.connect").run {
             try MongoConnection(
                 host: host, port: port, user: user, password: password, database: database,
-                authSource: authSource ?? (database.isEmpty ? "admin" : "admin"), tls: tls)
+                authSource: (authSource?.isEmpty == false ? authSource! : "admin"), tls: tls)
         }
     }
 
@@ -39,21 +39,62 @@ public final class MongoConnection: @unchecked Sendable {
         socket = try TCPSocket(host: host, port: port)
         stream = socket
         do {
-            if tls.mode != .disable {
-                // MongoDB speaks TLS from the first byte (no in-protocol negotiation).
-                do {
-                    let t = try TLSStream(socket: socket, host: host, options: tls)
-                    stream = t
-                    securityDescription = t.negotiatedDescription
-                } catch where !tls.mode.requiresTLS {
-                    throw DatabaseError("TLS handshake failed; set SSL mode to Disable for servers without TLS")
-                }
+            // MongoDB speaks TLS from the first byte (no negotiation), so "prefer" means plain.
+            if tls.mode.requiresTLS {
+                let t = try TLSStream(socket: socket, host: host, options: tls)
+                stream = t
+                securityDescription = t.negotiatedDescription
             }
             try handshake()
         } catch {
             socket.close()
             throw error
         }
+    }
+
+    /// Connects using a data source config (SSH tunnel, SRV, authSource, replica-set primary).
+    public static func connect(config: DataSourceConfig, password: String) async throws -> MongoConnection {
+        var tls = config.tlsOptions
+        var authSource = config.authSource
+        var candidates: [(String, Int)] = [(config.host, config.port)]
+        if config.srv {
+            let resolved = try await SerialWorker(label: "dbide.srv").run { try DNSSRV.resolveMongoSRV(config.host) }
+            candidates = resolved.hosts
+            if authSource.isEmpty, let a = resolved.options["authSource"] { authSource = a }
+            if tls.mode == .disable || tls.mode == .prefer { tls.mode = .require }  // SRV implies TLS by default
+            if resolved.options["tls"] == "false" || resolved.options["ssl"] == "false" { tls.mode = .disable }
+        }
+        var lastError: Error = DatabaseError("No MongoDB hosts")
+        for (host, port) in candidates {
+            do {
+                var cfg = config
+                cfg.host = host
+                cfg.port = port
+                cfg.sslMode = tls.mode
+                let (h, p, endpointTLS) = try await cfg.endpoint()
+                var useTLS = endpointTLS
+                useTLS.serverName = config.ssh.enabled ? host : nil
+                let conn = try await connect(
+                    host: h, port: p, user: config.user, password: password, database: config.database,
+                    authSource: authSource, tls: useTLS)
+                // Writes must go to the primary of a replica set.
+                if !conn.isWritablePrimary, let primary = conn.primaryHost, !config.ssh.enabled,
+                    let colon = primary.lastIndex(of: ":"), let pport = Int(primary[primary.index(after: colon)...])
+                {
+                    let phost = String(primary[..<colon])
+                    if phost != host || pport != port {
+                        await conn.close()
+                        return try await connect(
+                            host: phost, port: pport, user: config.user, password: password, database: config.database,
+                            authSource: authSource, tls: tls)
+                    }
+                }
+                return conn
+            } catch {
+                lastError = error
+            }
+        }
+        throw lastError
     }
 
     // MARK: OP_MSG
@@ -229,6 +270,20 @@ public final class MongoConnection: @unchecked Sendable {
     }
 
     func shutdownSocket() { socket.shutdown() }
+
+    private let tagLock = NSLock()
+    private var _runningTag: String?
+    /// Comment attached to the operation in flight (used by `cancel()` to find it).
+    var runningTag: String? {
+        tagLock.lock()
+        defer { tagLock.unlock() }
+        return _runningTag
+    }
+    func setRunningTag(_ tag: String?) {
+        tagLock.lock()
+        _runningTag = tag
+        tagLock.unlock()
+    }
 }
 
 import CryptoKit
