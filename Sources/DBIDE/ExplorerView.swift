@@ -10,12 +10,14 @@ enum ExplorerNode: Hashable {
     case column(UUID, TableInfo, String)
     case routine(UUID, RoutineInfo)
     case folder(UUID, String)
+    case group(String)
 }
 
 struct ExplorerView: View {
     @Environment(AppModel.self) private var app
     @State private var selection: Set<ExplorerNode> = []
     @State private var expanded: Set<String> = []
+    @State private var collapsedFolders: Set<String> = []
     @State private var filter = ""
 
     var body: some View {
@@ -57,10 +59,27 @@ struct ExplorerView: View {
                 emptyState
             } else {
                 List(selection: $selection) {
-                    ForEach(app.dataSources, id: \.config.id) { ds in
+                    ForEach(app.folders, id: \.self) { folder in
+                        DisclosureGroup(
+                            isExpanded: Binding(
+                                get: { !collapsedFolders.contains(folder) },
+                                set: { if $0 { collapsedFolders.remove(folder) } else { collapsedFolders.insert(folder) } })
+                        ) {
+                            ForEach(app.dataSources.filter { $0.config.folder == folder }, id: \.config.id) { ds in
+                                DataSourceRow(session: ds, expanded: $expanded, filter: filter)
+                            }
+                        } label: {
+                            HStack {
+                                Label(folder, systemImage: "folder.fill").foregroundStyle(.primary)
+                                Text("\(app.dataSources.filter { $0.config.folder == folder }.count)")
+                                    .font(.caption).foregroundStyle(.tertiary)
+                            }
+                        }
+                        .tag(ExplorerNode.group(folder))
+                    }
+                    ForEach(app.dataSources.filter { $0.config.folder.isEmpty }, id: \.config.id) { ds in
                         DataSourceRow(session: ds, expanded: $expanded, filter: filter)
                     }
-                    .onMove { app.moveDataSources(from: $0, to: $1) }
                 }
                 .listStyle(.sidebar)
                 .contextMenu(forSelectionType: ExplorerNode.self) { nodes in
@@ -99,7 +118,7 @@ struct ExplorerView: View {
             if let ds = app.session(for: id) { app.openTable(t, in: ds) }
         case .column(let id, _, let name):
             app.insertIntoConsole(name, dataSource: id)
-        case .routine, .folder:
+        case .routine, .folder, .group:
             break
         }
     }
@@ -130,6 +149,18 @@ struct ExplorerView: View {
                     Divider()
                     Button("Properties…") { app.beginEdit(ds) }
                     Button("Duplicate") { app.duplicate(ds) }
+                    Menu("Move to Folder") {
+                        ForEach(app.folders.filter { $0 != ds.config.folder }, id: \.self) { f in
+                            Button(f) { app.setFolder(f, for: ds) }
+                        }
+                        if !app.folders.isEmpty { Divider() }
+                        Button("New Folder…") {
+                            if let name = askName(title: "New folder", initial: ""), !name.isEmpty { app.setFolder(name, for: ds) }
+                        }
+                        if !ds.config.folder.isEmpty {
+                            Button("Remove from Folder") { app.setFolder("", for: ds) }
+                        }
+                    }
                     Divider()
                     Button("Delete Data Source", role: .destructive) { confirmDelete(ds) }
                 }
@@ -189,6 +220,11 @@ struct ExplorerView: View {
                 }
             case .folder:
                 EmptyView()
+            case .group(let folder):
+                Button("Rename Folder…") {
+                    if let name = askName(title: "Rename folder", initial: folder), !name.isEmpty { app.renameFolder(folder, to: name) }
+                }
+                Button("Ungroup") { app.renameFolder(folder, to: "") }
             }
         }
     }
@@ -196,6 +232,18 @@ struct ExplorerView: View {
     private func copy(_ s: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(s, forType: .string)
+    }
+
+    private func askName(title: String, initial: String) -> String? {
+        let alert = NSAlert()
+        alert.messageText = title
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.stringValue = initial
+        alert.accessoryView = field
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        return alert.runModal() == .alertFirstButtonReturn ? field.stringValue.trimmingCharacters(in: .whitespaces) : nil
     }
 
     private func confirmDelete(_ ds: DataSourceSession) {

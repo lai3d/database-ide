@@ -14,7 +14,7 @@ Estimates are Claude Code session time.
 - ✅ SQL lexer (highlighting) and statement splitter (dollar quotes, nested comments, trigger bodies, MySQL `DELIMITER`)
 - ✅ Introspection: schemas, tables / views, columns, indexes, routines, DDL (all three dialects)
 - ✅ Export: CSV / TSV / JSON / Markdown / SQL INSERT
-- ✅ Tests: unit tests + docker-backed PostgreSQL 16 (TLS) / MySQL 8.4 / MongoDB 7 / SSH bastion tests (`scripts/test-servers.sh`) — 96 tests
+- ✅ Tests: unit tests + docker-backed PostgreSQL 16 (TLS) / MySQL 8.4 / MongoDB 7 / SSH bastion tests (`scripts/test-servers.sh`) — 102 tests
 
 ## Phase 1 — Core IDE (MVP)
 
@@ -77,7 +77,7 @@ Estimates are Claude Code session time.
 |---|---|---|---|
 | 5.1 | ✅ Settings | ⌘, — editor font size (live), completion auto-popup on/off, keyword case for the formatter, default row limit and transaction mode for new consoles | 0.2h |
 | 5.2 | ✅ Data source colors & write guard | Color tag (e.g. red = production) on tabs, console toolbar and explorer; optional "confirm before modifying data" — classifies statements (data-modifying CTEs, SELECT INTO, EXPLAIN ANALYZE DML…) and asks before console runs and table-editor submits | 0.3h |
-| 5.2b | ⬜ Data source folders | Group data sources in the explorer | 0.2h |
+| 5.2b | ✅ Data source folders | Folder field in the dialog, "Move to Folder" / new folder / rename / ungroup in the explorer, folders expanded by default | 0.2h |
 | 5.3 | ✅ CI & packaging | GitHub Actions on macOS: build, unit tests, bundled `.app` artifact; `v*` tag publishes a release zip; app icon; version from tag (server tests run locally via `scripts/test-servers.sh`) | 0.3h |
 
 **User must do manually** (duration outside Claude's control): Apple Developer Program enrollment,

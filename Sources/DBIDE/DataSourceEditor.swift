@@ -42,6 +42,15 @@ struct DataSourceEditor: View {
                     if new == .mongodb, config.sslMode == .prefer { config.sslMode = .disable }
                 }
                 TextField("Name", text: $config.name, prompt: Text(config.displayName))
+                HStack {
+                    TextField("Folder", text: $config.folder, prompt: Text("none"))
+                    if !app.folders.isEmpty {
+                        Menu {
+                            ForEach(app.folders, id: \.self) { f in Button(f) { config.folder = f } }
+                        } label: { Image(systemName: "folder") }
+                            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                    }
+                }
 
                 if config.dialect == .sqlite {
                     HStack {

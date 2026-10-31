@@ -25,6 +25,8 @@ public struct DataSourceConfig: Codable, Sendable, Identifiable, Hashable {
     public var authSource: String
     /// MongoDB: resolve `host` as a `mongodb+srv://` cluster name via DNS SRV.
     public var srv: Bool
+    /// Explorer group ("" = top level).
+    public var folder: String
 
     public var tlsOptions: TLSOptions {
         TLSOptions(mode: sslMode, rootCertificatePath: sslRootCert.isEmpty ? nil : sslRootCert)
@@ -34,7 +36,7 @@ public struct DataSourceConfig: Codable, Sendable, Identifiable, Hashable {
         id: UUID = UUID(), name: String = "", dialect: SQLDialect = .postgres, host: String = "localhost",
         port: Int? = nil, user: String = "", database: String = "", filePath: String = "",
         readOnly: Bool = false, color: String? = nil, sslMode: SSLMode = .prefer, sslRootCert: String = "",
-        ssh: SSHConfig = SSHConfig(), confirmWrites: Bool = false, authSource: String = "", srv: Bool = false
+        ssh: SSHConfig = SSHConfig(), confirmWrites: Bool = false, authSource: String = "", srv: Bool = false, folder: String = ""
     ) {
         self.id = id
         self.name = name
@@ -52,10 +54,11 @@ public struct DataSourceConfig: Codable, Sendable, Identifiable, Hashable {
         self.confirmWrites = confirmWrites
         self.authSource = authSource
         self.srv = srv
+        self.folder = folder
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, dialect, host, port, user, database, filePath, readOnly, color, sslMode, sslRootCert, ssh, confirmWrites, authSource, srv
+        case id, name, dialect, host, port, user, database, filePath, readOnly, color, sslMode, sslRootCert, ssh, confirmWrites, authSource, srv, folder
     }
 
     /// Tolerates fields added in later versions being absent from saved state.
@@ -77,6 +80,7 @@ public struct DataSourceConfig: Codable, Sendable, Identifiable, Hashable {
         confirmWrites = try c.decodeIfPresent(Bool.self, forKey: .confirmWrites) ?? false
         authSource = try c.decodeIfPresent(String.self, forKey: .authSource) ?? ""
         srv = try c.decodeIfPresent(Bool.self, forKey: .srv) ?? false
+        folder = try c.decodeIfPresent(String.self, forKey: .folder) ?? ""
     }
 
     public var displayName: String {

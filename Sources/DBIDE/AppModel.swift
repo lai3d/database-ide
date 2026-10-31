@@ -121,6 +121,19 @@ final class AppModel {
         scheduleSave()
     }
 
+    /// Folder names in use, sorted.
+    var folders: [String] { Array(Set(dataSources.map(\.config.folder).filter { !$0.isEmpty })).sorted { $0.localizedStandardCompare($1) == .orderedAscending } }
+
+    func setFolder(_ folder: String, for session: DataSourceSession) {
+        session.config.folder = folder.trimmingCharacters(in: .whitespaces)
+        scheduleSave()
+    }
+
+    func renameFolder(_ old: String, to new: String) {
+        for ds in dataSources where ds.config.folder == old { ds.config.folder = new.trimmingCharacters(in: .whitespaces) }
+        scheduleSave()
+    }
+
     func moveDataSources(from: IndexSet, to: Int) {
         dataSources.move(fromOffsets: from, toOffset: to)
         scheduleSave()
