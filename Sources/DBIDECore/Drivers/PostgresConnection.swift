@@ -292,19 +292,24 @@ public final class PostgresConnection: DatabaseConnection, @unchecked Sendable {
     }
 }
 
-// MARK: - SCRAM-SHA-256
+// MARK: - SCRAM (SHA-256 for PostgreSQL / MongoDB, SHA-1 for older MongoDB users)
 
 final class SCRAMClient {
+    enum Hash { case sha256, sha1 }
+
     let password: String
     let clientNonce: String
+    let hash: Hash
     private(set) var clientFirstBare: String
     private var expectedServerSignature: [UInt8] = []
 
     /// PostgreSQL ignores the SCRAM user name (it uses the startup user), so it defaults to empty.
-    init(password: String, nonce: String? = nil, user: String = "") {
+    init(password: String, nonce: String? = nil, user: String = "", hash: Hash = .sha256) {
         self.password = password
+        self.hash = hash
         clientNonce = nonce ?? Data((0..<18).map { _ in UInt8.random(in: 0...255) }).base64EncodedString()
-        clientFirstBare = "n=\(user),r=" + clientNonce
+        let escapedUser = user.replacingOccurrences(of: "=", with: "=3D").replacingOccurrences(of: ",", with: "=2C")
+        clientFirstBare = "n=\(escapedUser),r=" + clientNonce
     }
 
     var clientFirstMessage: String { "n,," + clientFirstBare }
@@ -319,37 +324,53 @@ final class SCRAMClient {
             let iterations = attrs["i"].flatMap({ Int($0) })
         else { throw DatabaseError("Invalid SCRAM server-first message") }
 
-        let salted = Self.pbkdf2(password: password, salt: [UInt8](salt), iterations: iterations)
-        let clientKey = Self.hmac(salted, Array("Client Key".utf8))
-        let storedKey = [UInt8](SHA256.hash(data: clientKey))
+        let salted = pbkdf2(password: password, salt: [UInt8](salt), iterations: iterations)
+        let clientKey = hmac(salted, Array("Client Key".utf8))
+        let storedKey = digest(clientKey)
         let withoutProof = "c=biws,r=" + nonce
         let authMessage = clientFirstBare + "," + serverFirst + "," + withoutProof
-        let signature = Self.hmac(storedKey, Array(authMessage.utf8))
+        let signature = hmac(storedKey, Array(authMessage.utf8))
         let proof = zip(clientKey, signature).map { $0 ^ $1 }
-        let serverKey = Self.hmac(salted, Array("Server Key".utf8))
-        expectedServerSignature = Self.hmac(serverKey, Array(authMessage.utf8))
+        let serverKey = hmac(salted, Array("Server Key".utf8))
+        expectedServerSignature = hmac(serverKey, Array(authMessage.utf8))
         return withoutProof + ",p=" + Data(proof).base64EncodedString()
     }
 
     func verifyServerFinal(_ message: String) throws {
         if message.hasPrefix("e=") { throw DatabaseError("SCRAM authentication failed: \(message.dropFirst(2))") }
-        guard message.hasPrefix("v="), let sig = Data(base64Encoded: String(message.dropFirst(2))),
-            [UInt8](sig) == expectedServerSignature
+        // MongoDB may append further attributes after v=…
+        let v = message.split(separator: ",").first { $0.hasPrefix("v=") }.map { String($0.dropFirst(2)) } ?? ""
+        guard let sig = Data(base64Encoded: v), [UInt8](sig) == expectedServerSignature
         else { throw DatabaseError("SCRAM server signature mismatch") }
+    }
+
+    private func digest(_ data: [UInt8]) -> [UInt8] {
+        switch hash {
+        case .sha256: [UInt8](SHA256.hash(data: data))
+        case .sha1: [UInt8](Insecure.SHA1.hash(data: data))
+        }
+    }
+
+    private func hmac(_ key: [UInt8], _ data: [UInt8]) -> [UInt8] {
+        switch hash {
+        case .sha256: [UInt8](HMAC<SHA256>.authenticationCode(for: data, using: SymmetricKey(data: key)))
+        case .sha1: [UInt8](HMAC<Insecure.SHA1>.authenticationCode(for: data, using: SymmetricKey(data: key)))
+        }
     }
 
     static func hmac(_ key: [UInt8], _ data: [UInt8]) -> [UInt8] {
         [UInt8](HMAC<SHA256>.authenticationCode(for: data, using: SymmetricKey(data: key)))
     }
 
-    static func pbkdf2(password: String, salt: [UInt8], iterations: Int) -> [UInt8] {
-        var out = [UInt8](repeating: 0, count: 32)
+    private func pbkdf2(password: String, salt: [UInt8], iterations: Int) -> [UInt8] {
+        let size = hash == .sha256 ? 32 : 20
+        var out = [UInt8](repeating: 0, count: size)
         let pw = Array(password.utf8)
+        let prf = CCPseudoRandomAlgorithm(hash == .sha256 ? kCCPRFHmacAlgSHA256 : kCCPRFHmacAlgSHA1)
         _ = pw.withUnsafeBufferPointer { pwp in
-            pwp.baseAddress!.withMemoryRebound(to: CChar.self, capacity: pw.count) { pwc in
+            pwp.baseAddress!.withMemoryRebound(to: CChar.self, capacity: max(pw.count, 1)) { pwc in
                 CCKeyDerivationPBKDF(
-                    CCPBKDFAlgorithm(kCCPBKDF2), pwc, pw.count, salt, salt.count,
-                    CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA256), UInt32(iterations), &out, out.count)
+                    CCPBKDFAlgorithm(kCCPBKDF2), pwc, pw.count, salt, salt.count, prf, UInt32(iterations), &out, out.count)
             }
         }
         return out

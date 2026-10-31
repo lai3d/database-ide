@@ -40,6 +40,16 @@ Estimates are Claude Code session time.
 | 2.3 | ✅ Connection URL import | Paste `postgres://`, `mysql://`, `jdbc:…`, `sqlite://` or a file path into the dialog; also reads sslmode / sslrootcert / useSSL | 0.2h |
 | 2.4 | ⬜ More engines | MariaDB-specific tweaks, then maybe ClickHouse (HTTP) / SQL Server (TDS) | 1h+ each |
 
+## Phase 2.5 — MongoDB
+
+| # | Item | Notes | Est. |
+|---|---|---|---|
+| M.1 | 🚧 Driver | OP_MSG wire protocol + BSON in Swift, SCRAM-SHA-256 auth, TLS, cursors (getMore / killCursors), cancel via killOp | 1h |
+| M.2 | ⬜ Connection strings | `mongodb://` and `mongodb+srv://` (DNS SRV + TXT), authSource, replica-set primary discovery | 0.5h |
+| M.3 | ⬜ Explorer | Databases → collections / views → sampled fields with types, indexes | 0.5h |
+| M.4 | ⬜ Shell-style console | `db.coll.find(…).sort(…).limit(…)`, aggregate, count, distinct, insert / update / delete, createIndex, `show dbs` / `use`; relaxed JSON with ObjectId / ISODate / NumberLong / regex | 1h |
+| M.5 | ⬜ Document results | Flattened grid + JSON document view; open collection like a table | 0.5–1h |
+
 ## Phase 3 — Editor & query power
 
 | # | Item | Notes | Est. |
