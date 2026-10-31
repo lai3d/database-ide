@@ -40,4 +40,6 @@ swift test                    # unit tests + SQLite
 - No TLS yet: servers must accept unencrypted connections (`sslmode=disable` equivalent).
 - No SSH tunnels; text-protocol results only.
 
+See [ROADMAP.md](ROADMAP.md) for what is done and what is next.
+
 Sibling projects: [golang-ide](https://github.com/lai3d/golang-ide).
