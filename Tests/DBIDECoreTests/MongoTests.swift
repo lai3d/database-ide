@@ -229,3 +229,38 @@ struct MongoShellLiveTests {
         await c.close()
     }
 }
+
+@Suite struct MongoCompletionTests {
+    let people = TableInfo(schema: "shop", name: "people", kind: .table)
+    var catalog: CompletionCatalog {
+        CompletionCatalog(
+            schemas: ["shop", "admin"], defaultSchema: "shop",
+            tables: ["shop": [people, TableInfo(schema: "shop", name: "orders", kind: .table)]],
+            columns: ["shop.people": [ColumnInfo(name: "_id", type: "objectId", nullable: false, isPrimaryKey: true),
+                                      ColumnInfo(name: "name", type: "string", nullable: false, isPrimaryKey: false)]])
+    }
+    func labels(_ s: String) -> [String] {
+        let caret = (s as NSString).range(of: "|").location
+        let text = (s as NSString).replacingCharacters(in: NSRange(location: caret, length: 1), with: "")
+        return MongoCompletion.complete(text: text, caret: caret, catalog: catalog).items.map(\.label)
+    }
+
+    @Test func contexts() {
+        #expect(labels("db.p|") == ["people"])
+        #expect(labels("db.|").prefix(2) == ["people", "orders"])
+        #expect(labels("db.people.fi|") == ["find", "findOne"])
+        #expect(labels("db.getCollection('people').ins|") == ["insertOne", "insertMany"])
+        #expect(labels("db.people.find({}).so|") == ["sort"])
+        #expect(labels("db.people.find({ na|") == ["name"])
+        #expect(labels("db.people.find({ age: { $g|") == ["$gt", "$gte", "$group"])
+        #expect(labels("use a|") == ["admin"])
+    }
+
+    @Test func urls() throws {
+        let p = try #require(ConnectionURL.parse("mongodb+srv://app:s3cret@cluster0.abcd.mongodb.net/shop?retryWrites=true&authSource=admin"))
+        #expect(p.config.dialect == .mongodb && p.config.srv && p.config.host == "cluster0.abcd.mongodb.net")
+        #expect(p.config.database == "shop" && p.config.authSource == "admin" && p.config.sslMode == .require && p.password == "s3cret")
+        let q = try #require(ConnectionURL.parse("mongodb://root:x@localhost:27018/?tls=false"))
+        #expect(!q.config.srv && q.config.port == 27018 && q.config.sslMode == .disable)
+    }
+}

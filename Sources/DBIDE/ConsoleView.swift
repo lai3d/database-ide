@@ -83,6 +83,7 @@ struct ConsoleView: View {
                 .frame(maxWidth: 180)
                 .help("Current schema")
             }
+            if console.dialect.isSQL {
             Divider().frame(height: 16)
             Picker("Transaction", selection: $console.autoCommit) {
                 Text("Auto").tag(true)
@@ -110,6 +111,7 @@ struct ConsoleView: View {
                 Label("Transaction open", systemImage: "exclamationmark.circle.fill")
                     .foregroundStyle(.orange)
                     .help("Changes are not visible to other sessions until you commit")
+            }
             }
             Spacer()
             if console.isRunning || console.isConnecting {
@@ -169,6 +171,7 @@ private struct ParameterSheet: View {
 
 private struct ResultsPanel: View {
     @Bindable var console: ConsoleModel
+    @State private var showJSON = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -188,6 +191,16 @@ private struct ResultsPanel: View {
                     }
                 }
                 Spacer()
+                if let r = console.results.first(where: { $0.id == console.selectedResultID }), r.plan == nil, r.result.documents != nil {
+                    Picker("", selection: $showJSON) {
+                        Text("Grid").tag(false)
+                        Text("JSON").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                    .controlSize(.small)
+                }
                 if let r = console.results.first(where: { $0.id == console.selectedResultID }), r.plan == nil {
                     Text(r.result.summary).font(.caption).foregroundStyle(.secondary)
                     ExportMenu(result: r.result, dialect: console.dialect, name: r.title)
@@ -199,6 +212,8 @@ private struct ResultsPanel: View {
             Divider()
             if let r = console.results.first(where: { $0.id == console.selectedResultID }), let plan = r.plan {
                 PlanView(plan: plan).id(r.id)
+            } else if let r = console.results.first(where: { $0.id == console.selectedResultID }), showJSON, let docs = r.result.documents {
+                DocumentsView(documents: docs)
             } else if let r = console.results.first(where: { $0.id == console.selectedResultID }) {
                 ResultGridView(source: .readOnly(r.result, dialect: console.dialect, version: r.id.hashValue &+ r.result.rows.count))
                     .id(r.id)
@@ -239,6 +254,23 @@ private struct ResultsPanel: View {
                 }
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// MongoDB documents rendered as shell-style JSON.
+struct DocumentsView: View {
+    let documents: [BSONDocument]
+    @State private var text = ""
+
+    var body: some View {
+        SQLEditorView(text: $text, dialect: .mongodb, isEditable: false)
+            .onAppear { text = render() }
+            .onChange(of: documents) { text = render() }
+    }
+
+    private func render() -> String {
+        documents.prefix(2000).map(\.prettyString).joined(separator: ",\n")
+            + (documents.count > 2000 ? "\n// … \(documents.count - 2000) more" : "")
     }
 }
 

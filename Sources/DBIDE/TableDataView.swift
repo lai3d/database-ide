@@ -99,14 +99,14 @@ struct TableDataView: View {
 
     private var filters: some View {
         HStack(spacing: 8) {
-            Text("WHERE").font(.system(size: 11, weight: .semibold, design: .monospaced)).foregroundStyle(.blue)
-            TextField("e.g. id > 10 AND name LIKE 'a%'", text: $model.filter)
+            Text(model.dialect == .mongodb ? "FILTER" : "WHERE").font(.system(size: 11, weight: .semibold, design: .monospaced)).foregroundStyle(.blue)
+            TextField(model.dialect == .mongodb ? "e.g. { age: { $gt: 30 } }" : "e.g. id > 10 AND name LIKE 'a%'", text: $model.filter)
                 .font(.system(size: 12, design: .monospaced))
                 .textFieldStyle(.plain)
                 .onSubmit { Task { await model.reload(resetPage: true) } }
             Divider().frame(height: 16)
-            Text("ORDER BY").font(.system(size: 11, weight: .semibold, design: .monospaced)).foregroundStyle(.blue)
-            TextField("e.g. id DESC", text: $model.orderBy)
+            Text(model.dialect == .mongodb ? "SORT" : "ORDER BY").font(.system(size: 11, weight: .semibold, design: .monospaced)).foregroundStyle(.blue)
+            TextField(model.dialect == .mongodb ? "e.g. { age: -1 }" : "e.g. id DESC", text: $model.orderBy)
                 .font(.system(size: 12, design: .monospaced))
                 .textFieldStyle(.plain)
                 .frame(maxWidth: 220)

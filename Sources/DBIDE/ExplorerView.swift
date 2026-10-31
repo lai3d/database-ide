@@ -119,7 +119,7 @@ struct ExplorerView: View {
                         Button("Connect") { Task { await ds.connect() } }
                     }
                     if ds.isConnected, let schema = ds.defaultSchema ?? ds.schemas.first?.name {
-                        Button("Show ER Diagram") { app.openDiagram(schema: schema, in: ds) }
+                        if ds.config.dialect.isSQL { Button("Show ER Diagram") { app.openDiagram(schema: schema, in: ds) } }
                         Button("Import CSV as New Table…") {
                             app.csvImport = CSVImportTarget(session: ds, schema: schema, table: nil)
                         }
@@ -136,7 +136,7 @@ struct ExplorerView: View {
                     Button("Refresh") {
                         if let n = ds.schema(named: schema) { Task { await ds.loadSchema(n, force: true) } }
                     }
-                    Button("Show ER Diagram") { app.openDiagram(schema: schema, in: ds) }
+                    if ds.config.dialect.isSQL { Button("Show ER Diagram") { app.openDiagram(schema: schema, in: ds) } }
                     Button("Import CSV as New Table…") {
                         app.csvImport = CSVImportTarget(session: ds, schema: schema, table: nil)
                     }
@@ -151,12 +151,21 @@ struct ExplorerView: View {
                     }
                     Divider()
                     let q = ds.config.dialect.qualified(schema: t.schema, name: t.name)
-                    Button("SELECT in Console") { app.insertIntoConsole("SELECT * FROM \(q);", dataSource: id) }
+                    if ds.config.dialect == .mongodb {
+                        Button("Query in Console") {
+                            app.insertIntoConsole("db.getCollection(\(SQLDialect.mongodb.literal(t.name))).find({})", dataSource: id)
+                        }
+                    } else {
+                        Button("SELECT in Console") { app.insertIntoConsole("SELECT * FROM \(q);", dataSource: id) }
+                    }
                     Button("Copy Name") { copy(t.name) }
                     Button("Copy Qualified Name") { copy(q) }
                     Divider()
-                    Button("Drop \(t.kind == .table ? "Table" : "View")…", role: .destructive) {
-                        app.insertIntoConsole("DROP \(t.kind == .table ? "TABLE" : "VIEW") \(q);", dataSource: id)
+                    Button("Drop \(ds.config.dialect == .mongodb ? "Collection" : t.kind == .table ? "Table" : "View")…", role: .destructive) {
+                        app.insertIntoConsole(
+                            ds.config.dialect == .mongodb
+                                ? "db.getCollection(\(SQLDialect.mongodb.literal(t.name))).drop()"
+                                : "DROP \(t.kind == .table ? "TABLE" : "VIEW") \(q);", dataSource: id)
                     }
                 }
             case .column(_, _, let name):
@@ -335,7 +344,7 @@ private struct SchemaContents: View {
             let visible = filter.isEmpty ? tables : tables.filter { $0.name.localizedCaseInsensitiveContains(filter) }
             let plain = visible.filter { $0.kind == .table }
             let views = visible.filter { $0.kind != .table }
-            folder("tables", count: plain.count) {
+            folder(session.config.dialect == .mongodb ? "collections" : "tables", count: plain.count) {
                 ForEach(plain) { TableRow(session: session, schema: schema, table: $0, expanded: $expanded) }
             }
             if !views.isEmpty {

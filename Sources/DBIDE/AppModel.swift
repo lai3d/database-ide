@@ -79,6 +79,7 @@ final class AppModel {
         var c = DataSourceConfig(dialect: dialect)
         if dialect == .postgres { c.user = "postgres"; c.database = "postgres" }
         if dialect == .mysql { c.user = "root" }
+        if dialect == .mongodb { c.sslMode = .disable; c.database = "test" }
         editingDataSource = c
         editingIsNew = true
     }

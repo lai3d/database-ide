@@ -27,6 +27,7 @@ public enum ConnectionURL {
         switch scheme {
         case "postgres", "postgresql", "pgsql": dialect = .postgres
         case "mysql", "mariadb", "mysqlx": dialect = .mysql
+        case "mongodb", "mongodb+srv": dialect = .mongodb
         case "sqlite", "sqlite3", "file":
             let path = String(text[schemeEnd.upperBound...])
             return path.isEmpty ? nil : sqlite(path: path.removingPercentEncoding ?? path)
@@ -90,7 +91,15 @@ public enum ConnectionURL {
         } else if let ssl = query["ssl"] ?? query["usessl"] ?? query["tls"] {
             config.sslMode = ["true", "1", "require", "required"].contains(ssl.lowercased()) ? .require : .disable
         }
-        if let root = query["sslrootcert"] ?? query["ssl-ca"] { config.sslRootCert = root }
+        if let root = query["sslrootcert"] ?? query["ssl-ca"] ?? query["tlscafile"] { config.sslRootCert = root }
+        if dialect == .mongodb {
+            config.srv = scheme == "mongodb+srv"
+            if config.srv { config.port = 27017 }
+            config.authSource = query["authsource"] ?? ""
+            let tlsFlag = (query["tls"] ?? query["ssl"])?.lowercased()
+            config.sslMode = tlsFlag == "true" || (config.srv && tlsFlag != "false") ? .require : .disable
+            if query["tlsallowinvalidcertificates"] == nil, query["tlscafile"] != nil { config.sslMode = .verifyCA }
+        }
         return Parsed(config: config, password: password)
     }
 

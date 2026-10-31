@@ -14,7 +14,7 @@ Estimates are Claude Code session time.
 - ✅ SQL lexer (highlighting) and statement splitter (dollar quotes, nested comments, trigger bodies, MySQL `DELIMITER`)
 - ✅ Introspection: schemas, tables / views, columns, indexes, routines, DDL (all three dialects)
 - ✅ Export: CSV / TSV / JSON / Markdown / SQL INSERT
-- ✅ Tests: unit tests + docker-backed PostgreSQL 16 (TLS) / MySQL 8.4 / SSH bastion tests (`scripts/test-servers.sh`) — 81 tests
+- ✅ Tests: unit tests + docker-backed PostgreSQL 16 (TLS) / MySQL 8.4 / MongoDB 7 / SSH bastion tests (`scripts/test-servers.sh`) — 96 tests
 
 ## Phase 1 — Core IDE (MVP)
 
@@ -38,17 +38,17 @@ Estimates are Claude Code session time.
 | 2.1b | ⬜ TLS 1.3 | Current TLS layer is SecureTransport (TLS 1.2 max, deprecated by Apple); move to Network.framework with a STARTTLS framer | 0.8h |
 | 2.2 | ✅ SSH tunnel | System `ssh -L` (agent or key file), shared per target, restarted if it dies, closed on quit; TLS inside the tunnel verifies the real DB host name. Tested through a docker sshd bastion | 0.4h |
 | 2.3 | ✅ Connection URL import | Paste `postgres://`, `mysql://`, `jdbc:…`, `sqlite://` or a file path into the dialog; also reads sslmode / sslrootcert / useSSL | 0.2h |
-| 2.4 | ⬜ More engines | MariaDB-specific tweaks, then maybe ClickHouse (HTTP) / SQL Server (TDS) | 1h+ each |
+| 2.4 | 🚧 More engines | MongoDB ✅ (see Phase 2.5); next maybe ClickHouse (HTTP) / SQL Server (TDS) / Redis | 1h+ each |
 
 ## Phase 2.5 — MongoDB
 
 | # | Item | Notes | Est. |
 |---|---|---|---|
-| M.1 | 🚧 Driver | OP_MSG wire protocol + BSON in Swift, SCRAM-SHA-256 auth, TLS, cursors (getMore / killCursors), cancel via killOp | 1h |
-| M.2 | ⬜ Connection strings | `mongodb://` and `mongodb+srv://` (DNS SRV + TXT), authSource, replica-set primary discovery | 0.5h |
-| M.3 | ⬜ Explorer | Databases → collections / views → sampled fields with types, indexes | 0.5h |
-| M.4 | ⬜ Shell-style console | `db.coll.find(…).sort(…).limit(…)`, aggregate, count, distinct, insert / update / delete, createIndex, `show dbs` / `use`; relaxed JSON with ObjectId / ISODate / NumberLong / regex | 1h |
-| M.5 | ⬜ Document results | Flattened grid + JSON document view; open collection like a table | 0.5–1h |
+| M.1 | ✅ Driver | OP_MSG + BSON (incl. Decimal128) in Swift, SCRAM-SHA-256 and SHA-1, TLS, cursors (getMore / killCursors), cancel via killOp on a comment tag | 0.4h |
+| M.2 | ✅ Connection strings | `mongodb://` and `mongodb+srv://` (DNS SRV + TXT via dnssd, SRV-domain check), authSource, replica-set primary discovery, SSH tunnel. SRV not yet exercised against a real Atlas cluster | 0.2h |
+| M.3 | ✅ Explorer | Databases → collections / views → sampled fields with types, indexes; DDL as createCollection / createIndex | 0.2h |
+| M.4 | ✅ Shell-style console | `db.coll.find(…).sort(…).limit(…)`, aggregate, count, distinct, insert / update / replace / delete, indexes, drop, `show dbs` / `use`, `db.runCommand`; relaxed JS literals (ObjectId, ISODate, NumberLong, NumberDecimal, UUID, regex); completion for collections, methods, fields and `$` operators; explain plans | 0.5h |
+| M.5 | ✅ Document results | Flattened grid + JSON view; collection opens like a table (FILTER / SORT, paging, count) with editing via updateOne / deleteOne / insertOne by `_id` keeping BSON types; CSV import via insertMany | 0.3h |
 
 ## Phase 3 — Editor & query power
 

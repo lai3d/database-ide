@@ -3,12 +3,13 @@
 [![CI](https://github.com/lai3d/database-ide/actions/workflows/ci.yml/badge.svg)](https://github.com/lai3d/database-ide/actions/workflows/ci.yml)
 
 A native macOS database IDE in the spirit of JetBrains DataGrip, written in Swift (SwiftUI + AppKit) with no third-party dependencies.
+Supports **PostgreSQL, MySQL/MariaDB, SQLite and MongoDB**.
 
 > Early but usable: connects, browses, queries and edits data on real servers.
 
 ## Features
 
-- **Data sources**: SQLite, PostgreSQL, MySQL/MariaDB. All wire protocols are implemented in Swift
+- **Data sources**: SQLite, PostgreSQL, MySQL/MariaDB, MongoDB. All wire protocols are implemented in Swift
   (PostgreSQL SCRAM-SHA-256/MD5, MySQL caching_sha2_password/native_password). Passwords live in the Keychain.
   TLS with libpq-style modes (disable / prefer / require / verify-ca / verify-full) and an optional root CA.
   SSH tunnels through the system `ssh`. Paste a connection URL (`postgres://…`, `jdbc:mysql://…`, a `.db` path) to fill the form.
@@ -24,6 +25,9 @@ A native macOS database IDE in the spirit of JetBrains DataGrip, written in Swif
   copy rows as TSV/CSV/JSON/Markdown/INSERT, export to file.
 - **Table editor**: WHERE / ORDER BY filters, paging, row count; edit cells, set NULL, add/delete rows, preview the
   generated SQL and submit it in one transaction (tables with a primary key).
+- **MongoDB**: mongosh-style console (`db.coll.find({...}).sort(...)`, aggregate, CRUD, indexes, `show dbs`, `use`),
+  completion for collections / methods / fields / `$` operators, grid + JSON results, collection browser with editing,
+  explain plans, `mongodb+srv://` connection strings.
 - **Transactions**: Auto / Manual commit per console, Commit (⇧⌘K) / Rollback, open-transaction indicator.
 - **Formatter** (⌥⌘L) for the selection or the whole console.
 - **DDL viewer**, **query history** (⇧⌘E), consoles and their text persist across launches.

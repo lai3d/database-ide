@@ -233,7 +233,7 @@ final class ConsoleModel: Identifiable {
                 if res.hasResultSet {
                     newResults.append(ResultTab(title: resultTitle(st.text, index: newResults.count), result: res))
                 }
-                if dialect == .mysql, let schema = useTarget(st.text) { currentSchema = schema }
+                if dialect == .mysql || dialect == .mongodb, let schema = useTarget(st.text) { currentSchema = schema }
             } catch {
                 log.append(LogEntry(kind: .error, text: error.localizedDescription))
                 if let e = error as? DatabaseError, let pos = e.position {
@@ -332,6 +332,7 @@ final class ConsoleModel: Identifiable {
 
     /// Reformats the selection, or the whole console when nothing is selected.
     func reformat() {
+        guard dialect.isSQL else { return }
         let ns = text as NSString
         if selection.length > 0, NSMaxRange(selection) <= ns.length {
             let formatted = SQLFormatter.format(ns.substring(with: selection), dialect: dialect, options: .init(uppercaseKeywords: Preferences.uppercaseKeywords))
@@ -343,6 +344,7 @@ final class ConsoleModel: Identifiable {
     }
 
     private func resultTitle(_ sql: String, index: Int) -> String {
+        if dialect == .mongodb { return MongoCompletion.collectionName(in: sql) ?? "Result \(index + 1)" }
         let tokens = SQLLexer.tokenize(sql, dialect: dialect)
         let ns = sql as NSString
         // Use the first table after FROM as a title, like DataGrip.
@@ -364,6 +366,10 @@ final class ConsoleModel: Identifiable {
     }
 
     private func isDDL(_ sql: String) -> Bool {
+        if dialect == .mongodb {
+            return ["createCollection", "createView", ".drop()", "dropDatabase", "renameCollection", "insertOne", "insertMany"]
+                .contains { sql.contains($0) }
+        }
         let kw = SQLLexer.leadingKeywords(sql, count: 1).uppercased()
         return ["CREATE", "DROP", "ALTER", "RENAME", "COMMENT"].contains(kw)
     }
@@ -450,6 +456,12 @@ final class TableDataModel: Identifiable {
 
     func countRows() async {
         guard let conn = try? await ensureConnection() else { return }
+        if dialect == .mongodb {
+            let f = filter.trimmingCharacters(in: .whitespacesAndNewlines)
+            let cmd = "db.getCollection(\(SQLDialect.mongodb.literal(table.name))).countDocuments(\(f.isEmpty ? "{}" : f))"
+            totalCount = (try? await conn.execute(cmd))?.rows.first?.first.flatMap { if case .integer(let n) = $0 { Int(n) } else { nil } }
+            return
+        }
         var sql = "SELECT COUNT(*) FROM \(dialect.qualified(schema: table.schema, name: table.name))"
         let f = filter.trimmingCharacters(in: .whitespacesAndNewlines)
         if !f.isEmpty { sql += " WHERE \(f)" }
@@ -512,7 +524,8 @@ final class TableDataModel: Identifiable {
         guard let result else { return [] }
         do {
             return try pending.statements(
-                table: table, dialect: dialect, columns: result.columns, rows: result.rows, primaryKey: primaryKey)
+                table: table, dialect: dialect, columns: result.columns, rows: result.rows, primaryKey: primaryKey,
+                documents: result.documents)
         } catch {
             return ["-- " + error.localizedDescription]
         }
@@ -524,7 +537,8 @@ final class TableDataModel: Identifiable {
         isRunning = true
         do {
             let statements = try pending.statements(
-                table: table, dialect: dialect, columns: result.columns, rows: result.rows, primaryKey: primaryKey)
+                table: table, dialect: dialect, columns: result.columns, rows: result.rows, primaryKey: primaryKey,
+                documents: result.documents)
             if let config = app?.session(for: dataSourceID)?.config, !confirmWrites(statements, on: config) {
                 isRunning = false
                 return

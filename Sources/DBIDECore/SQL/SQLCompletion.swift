@@ -60,6 +60,7 @@ public enum SQLCompletion {
     public static func complete(
         text: String, caret: Int, dialect: SQLDialect, catalog: CompletionCatalog, limit: Int = 200
     ) -> SQLCompletionResult {
+        if dialect == .mongodb { return MongoCompletion.complete(text: text, caret: caret, catalog: catalog) }
         let ns = text as NSString
         let caret = min(max(0, caret), ns.length)
         // Partial word before the caret.

@@ -39,6 +39,7 @@ struct DataSourceEditor: View {
                 }
                 .onChange(of: config.dialect) { old, new in
                     if config.port == old.defaultPort || config.port == 0 { config.port = new.defaultPort }
+                    if new == .mongodb, config.sslMode == .prefer { config.sslMode = .disable }
                 }
                 TextField("Name", text: $config.name, prompt: Text(config.displayName))
 
@@ -49,15 +50,25 @@ struct DataSourceEditor: View {
                         Button("New…") { chooseFile(create: true) }
                     }
                 } else {
+                    if config.dialect == .mongodb {
+                        Toggle("DNS seed list (mongodb+srv)", isOn: $config.srv)
+                    }
                     HStack {
-                        TextField("Host", text: $config.host)
-                        TextField("Port", value: $config.port, format: .number.grouping(.never))
-                            .frame(width: 110)
+                        TextField(config.srv ? "Cluster" : "Host", text: $config.host,
+                                  prompt: Text(config.srv ? "cluster0.xxxx.mongodb.net" : "localhost"))
+                        if !(config.dialect == .mongodb && config.srv) {
+                            TextField("Port", value: $config.port, format: .number.grouping(.never))
+                                .frame(width: 110)
+                        }
                     }
                     TextField("User", text: $config.user)
                     SecureField("Password", text: $password, prompt: Text(isNew || passwordChanged ? "" : "•••••• (stored in Keychain)"))
                         .onChange(of: password) { passwordChanged = true }
-                    TextField("Database", text: $config.database, prompt: Text(config.dialect == .mysql ? "optional" : config.user))
+                    TextField("Database", text: $config.database,
+                              prompt: Text(config.dialect == .mysql ? "optional" : config.dialect == .mongodb ? "test" : config.user))
+                    if config.dialect == .mongodb {
+                        TextField("Auth source", text: $config.authSource, prompt: Text("admin"))
+                    }
                 }
                 if config.dialect != .sqlite {
                     Section("SSH Tunnel") {
@@ -142,6 +153,7 @@ struct DataSourceEditor: View {
     private var sslHelp: String {
         switch config.sslMode {
         case .disable: "Never encrypt the connection."
+        case .prefer where config.dialect == .mongodb: "MongoDB has no TLS negotiation: Prefer connects without TLS. Use Require for TLS."
         case .prefer: "Encrypt when the server supports it; certificate not checked."
         case .require: "Always encrypt; certificate not checked."
         case .verifyCA: "Always encrypt; certificate must chain to a trusted root."

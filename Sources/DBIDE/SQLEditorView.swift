@@ -97,7 +97,10 @@ struct SQLEditorView: NSViewRepresentable {
         if textView.string != text {
             // External change (history insert, restore): keep undo coherent.
             let sel = textView.selectedRange()
-            if textView.shouldChangeText(in: NSRange(location: 0, length: (textView.string as NSString).length), replacementString: text) {
+            if !textView.isEditable {
+                // Read-only views (DDL, JSON results) refuse shouldChangeText; just replace.
+                textView.string = text
+            } else if textView.shouldChangeText(in: NSRange(location: 0, length: (textView.string as NSString).length), replacementString: text) {
                 textView.string = text
                 textView.didChangeText()
             }
