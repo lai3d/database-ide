@@ -126,7 +126,8 @@ public struct DataSourceConfig: Codable, Sendable, Identifiable, Hashable {
             let (h, p, tls) = try await endpoint()
             return try await ClickHouseConnection.connect(host: h, port: p, user: user, password: password, database: database, tls: tls)
         case .sqlserver:
-            throw DatabaseError("SQL Server driver not available yet")
+            let (h, p, tls) = try await endpoint()
+            return try await SQLServerConnection.connect(host: h, port: p, user: user, password: password, database: database, tls: tls)
         case .redis:
             let (h, p, tls) = try await endpoint()
             return try await RedisConnection.connect(

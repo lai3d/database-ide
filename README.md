@@ -3,13 +3,14 @@
 [![CI](https://github.com/lai3d/database-ide/actions/workflows/ci.yml/badge.svg)](https://github.com/lai3d/database-ide/actions/workflows/ci.yml)
 
 A native macOS database IDE in the spirit of JetBrains DataGrip, written in Swift (SwiftUI + AppKit) with no third-party dependencies.
-Supports **PostgreSQL, MySQL/MariaDB, SQLite and MongoDB**.
+Supports **PostgreSQL, MySQL/MariaDB, SQLite, SQL Server, ClickHouse, MongoDB and Redis**.
 
 > Early but usable: connects, browses, queries and edits data on real servers.
 
 ## Features
 
-- **Data sources**: SQLite, PostgreSQL, MySQL/MariaDB, MongoDB. All wire protocols are implemented in Swift
+- **Data sources**: SQLite, PostgreSQL, MySQL/MariaDB, SQL Server (TDS), ClickHouse (HTTP), MongoDB, Redis (RESP3).
+  All wire protocols are implemented in Swift
   (PostgreSQL SCRAM-SHA-256/MD5, MySQL caching_sha2_password/native_password). Passwords live in the Keychain.
   TLS 1.2 / 1.3 (Network.framework) with libpq-style modes (disable / prefer / require / verify-ca / verify-full) and an optional root CA.
   SSH tunnels through the system `ssh`. Paste a connection URL (`postgres://…`, `jdbc:mysql://…`, a `.db` path) to fill the form.
@@ -28,6 +29,7 @@ Supports **PostgreSQL, MySQL/MariaDB, SQLite and MongoDB**.
 - **MongoDB**: mongosh-style console (`db.coll.find({...}).sort(...)`, aggregate, CRUD, indexes, `show dbs`, `use`),
   completion for collections / methods / fields / `$` operators, grid + JSON results, collection browser with editing,
   explain plans, `mongodb+srv://` connection strings.
+- **Redis**: redis-cli style console (quoting, escapes), key browser per database with type-aware value views.
 - **Transactions**: Auto / Manual commit per console, Commit (⇧⌘K) / Rollback, open-transaction indicator.
 - **Formatter** (⌥⌘L) for the selection or the whole console.
 - **DDL viewer**, **query history** (⇧⌘E), consoles and their text persist across launches.
@@ -53,6 +55,7 @@ Pushing a `v*` tag builds the app on GitHub Actions and attaches a zip to a GitH
 ## Limitations
 
 - SSH tunnels need key or agent auth (no SSH passwords); text-protocol results only.
+- SQL Server TLS uses TDS 8 "strict" mode (SQL Server 2022 / Azure SQL); older servers that force encryption are not supported yet.
 
 See [ROADMAP.md](ROADMAP.md) for what is done and what is next.
 

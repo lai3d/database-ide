@@ -496,6 +496,10 @@ public struct Introspector: Sendable {
         var sql = "SELECT * FROM \(dialect.qualified(schema: table.schema, name: table.name))"
         let f = filter.trimmingCharacters(in: .whitespacesAndNewlines)
         if !f.isEmpty { sql += " WHERE \(f)" }
+        if dialect == .sqlserver {
+            let o = orderBy.trimmingCharacters(in: .whitespacesAndNewlines)
+            return sql + " ORDER BY \(o.isEmpty ? "(SELECT NULL)" : o) OFFSET \(offset) ROWS FETCH NEXT \(limit) ROWS ONLY"
+        }
         let o = orderBy.trimmingCharacters(in: .whitespacesAndNewlines)
         if !o.isEmpty { sql += " ORDER BY \(o)" }
         sql += " LIMIT \(limit)"

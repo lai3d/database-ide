@@ -36,7 +36,17 @@ import Testing
         #expect(ConnectionURL.parse("sqlite:///Users/me/app.db")?.config.filePath == "/Users/me/app.db")
         #expect(ConnectionURL.parse("~/data/x.sqlite3")?.config.dialect == .sqlite)
         #expect(ConnectionURL.parse("/etc/hosts") == nil)
-        #expect(ConnectionURL.parse("redis://x") == nil)
+        #expect(ConnectionURL.parse("ftp://x") == nil)
         #expect(ConnectionURL.parse("hello") == nil)
+    }
+
+    @Test func newEngines() throws {
+        let r = try #require(ConnectionURL.parse("rediss://:pw@cache.example.com:6380/2"))
+        #expect(r.config.dialect == .redis && r.config.port == 6380 && r.config.database == "2" && r.config.sslMode == .require && r.password == "pw")
+        let s = try #require(ConnectionURL.parse("jdbc:sqlserver://db.example.com:1444;databaseName=shop;user=sa;password=p;w;encrypt=strict"))
+        #expect(s.config.dialect == .sqlserver && s.config.host == "db.example.com" && s.config.port == 1444)
+        #expect(s.config.database == "shop" && s.config.user == "sa" && s.config.sslMode == .require)
+        let c = try #require(ConnectionURL.parse("clickhouse://default:x@localhost:8123/analytics"))
+        #expect(c.config.dialect == .clickhouse && c.config.database == "analytics")
     }
 }

@@ -14,7 +14,7 @@ Estimates are Claude Code session time.
 - ✅ SQL lexer (highlighting) and statement splitter (dollar quotes, nested comments, trigger bodies, MySQL `DELIMITER`)
 - ✅ Introspection: schemas, tables / views, columns, indexes, routines, DDL (all three dialects)
 - ✅ Export: CSV / TSV / JSON / Markdown / SQL INSERT
-- ✅ Tests: unit tests + docker-backed PostgreSQL 16 (TLS) / MySQL 8.4 / MongoDB 7 / SSH bastion tests (`scripts/test-servers.sh`) — 103 tests
+- ✅ Tests: unit tests + docker-backed PostgreSQL 16 (TLS) / MySQL 8.4 / MongoDB 7 / ClickHouse 24.8 / SQL Server 2022 / Redis 7.4 / SSH bastion tests (`scripts/test-servers.sh`) — 114 tests
 
 ## Phase 1 — Core IDE (MVP)
 
@@ -38,7 +38,7 @@ Estimates are Claude Code session time.
 | 2.1b | ✅ TLS 1.3 | Network.framework TLS (1.2 / 1.3) replaces SecureTransport; a framer below TLS runs the PostgreSQL SSLRequest / MySQL greeting + SSL request (STARTTLS), MongoDB uses direct TLS; servers confirm TLSv1.3 in tests; "prefer" falls back to plain when the server declines | 0.4h |
 | 2.2 | ✅ SSH tunnel | System `ssh -L` (agent or key file), shared per target, restarted if it dies, closed on quit; TLS inside the tunnel verifies the real DB host name. Tested through a docker sshd bastion | 0.4h |
 | 2.3 | ✅ Connection URL import | Paste `postgres://`, `mysql://`, `jdbc:…`, `sqlite://` or a file path into the dialog; also reads sslmode / sslrootcert / useSSL | 0.2h |
-| 2.4 | 🚧 More engines | MongoDB ✅ (see Phase 2.5); next maybe ClickHouse (HTTP) / SQL Server (TDS) / Redis | 1h+ each |
+| 2.4 | ✅ More engines | MongoDB (Phase 2.5); **ClickHouse** (HTTP interface, sessions, system-table catalog, EXPLAIN, designer with MergeTree, KILL QUERY cancel); **SQL Server** (TDS 7.4 written from the spec: full type set incl. MAX / PLP, decimal, date/time family, GUID, sql_variant; ENVCHANGE transactions; SHOWPLAN / STATISTICS PROFILE plans; ATTENTION cancel; TDS 8 strict TLS — not yet tested against a strict-mode server); **Redis** (RESP3 with RESP2 fallback, redis-cli syntax, key browser, CLIENT KILL cancel). All tested against real servers | 1.5h |
 
 ## Phase 2.5 — MongoDB
 

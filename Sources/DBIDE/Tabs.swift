@@ -353,8 +353,11 @@ final class ConsoleModel: Identifiable {
         if let fromIndex = tokens.firstIndex(where: { ns.substring(with: $0.range).uppercased() == "FROM" }),
             fromIndex + 1 < tokens.count
         {
-            let t = tokens[fromIndex + 1]
-            if t.kind == .identifier || t.kind == .quotedIdentifier {
+            var i = fromIndex + 1
+            // schema.table → table
+            while i + 2 < tokens.count, ns.substring(with: tokens[i + 1].range) == "." { i += 2 }
+            let t = tokens[i]
+            if t.kind == .identifier || t.kind == .quotedIdentifier || t.kind == .keyword {
                 return ns.substring(with: t.range).trimmingCharacters(in: CharacterSet(charactersIn: "\"`[]"))
             }
         }

@@ -83,7 +83,7 @@ public enum ResultExport {
         case .text(let s): return dialect.literal(s)
         case .blob(let d):
             let hex = d.map { String(format: "%02X", $0) }.joined()
-            return dialect == .postgres ? "'\\x\(hex)'::bytea" : "X'\(hex)'"
+            return dialect == .postgres ? "'\\x\(hex)'::bytea" : dialect == .sqlserver ? "0x\(hex)" : "X'\(hex)'"
         }
     }
 

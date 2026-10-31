@@ -40,6 +40,22 @@ public enum ConnectionURL {
         // URLComponents can't handle unescaped special characters in passwords, so split by hand.
         var rest = String(text[schemeEnd.upperBound...])
         var query: [String: String] = [:]
+        // JDBC SQL Server style: host:port;key=value;key=value
+        if dialect == .sqlserver, let semi = rest.firstIndex(of: ";") {
+            var lastKey: String?
+            for part in rest[rest.index(after: semi)...].split(separator: ";") {
+                let kv = part.split(separator: "=", maxSplits: 1).map(String.init)
+                if kv.count == 2 {
+                    lastKey = kv[0].lowercased()
+                    query[lastKey!] = kv[1]
+                } else if let k = lastKey {  // a ';' inside the previous value (e.g. a password)
+                    query[k]! += ";" + kv[0]
+                }
+            }
+            rest = String(rest[..<semi])
+            if let db = query["databasename"] { query["database"] = db }
+            if let enc = query["encrypt"] { query["sslmode"] = ["true", "strict", "mandatory"].contains(enc.lowercased()) ? "require" : "disable" }
+        }
         if let q = rest.firstIndex(of: "?") {
             for pair in rest[rest.index(after: q)...].split(separator: "&") {
                 let kv = pair.split(separator: "=", maxSplits: 1).map(String.init)

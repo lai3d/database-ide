@@ -31,12 +31,13 @@ final class NWTLSStream: ByteStream, @unchecked Sendable {
     private(set) var negotiatedDescription = "TLS"
     private var closed = false
 
-    init(host: String, port: Int, options: TLSOptions, preamble: TLSPreamble? = nil, timeout: TimeInterval = 15) throws {
+    init(host: String, port: Int, options: TLSOptions, preamble: TLSPreamble? = nil, alpn: [String] = [], timeout: TimeInterval = 15) throws {
         let serverName = options.serverName ?? host
         let tls = NWProtocolTLS.Options()
         let sec = tls.securityProtocolOptions
         sec_protocol_options_set_min_tls_protocol_version(sec, .TLSv12)
         if !Self.isIPAddress(serverName) { sec_protocol_options_set_tls_server_name(sec, serverName) }
+        for proto in alpn { sec_protocol_options_add_tls_application_protocol(sec, proto) }
         let verifyMode = options.mode
         let anchors = try options.rootCertificatePath.flatMap { $0.isEmpty ? nil : try TLSStream.loadCertificates(($0 as NSString).expandingTildeInPath) }
         sec_protocol_options_set_verify_block(sec, { _, trustRef, complete in
