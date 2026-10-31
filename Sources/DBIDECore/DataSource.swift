@@ -15,11 +15,18 @@ public struct DataSourceConfig: Codable, Sendable, Identifiable, Hashable {
     public var readOnly: Bool
     /// Hex color tag for the data source (optional).
     public var color: String?
+    public var sslMode: SSLMode
+    /// Root CA (PEM) used for verify-ca / verify-full; empty = system trust store.
+    public var sslRootCert: String
+
+    public var tlsOptions: TLSOptions {
+        TLSOptions(mode: sslMode, rootCertificatePath: sslRootCert.isEmpty ? nil : sslRootCert)
+    }
 
     public init(
         id: UUID = UUID(), name: String = "", dialect: SQLDialect = .postgres, host: String = "localhost",
         port: Int? = nil, user: String = "", database: String = "", filePath: String = "",
-        readOnly: Bool = false, color: String? = nil
+        readOnly: Bool = false, color: String? = nil, sslMode: SSLMode = .prefer, sslRootCert: String = ""
     ) {
         self.id = id
         self.name = name
@@ -31,6 +38,29 @@ public struct DataSourceConfig: Codable, Sendable, Identifiable, Hashable {
         self.filePath = filePath
         self.readOnly = readOnly
         self.color = color
+        self.sslMode = sslMode
+        self.sslRootCert = sslRootCert
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, dialect, host, port, user, database, filePath, readOnly, color, sslMode, sslRootCert
+    }
+
+    /// Tolerates fields added in later versions being absent from saved state.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        dialect = try c.decode(SQLDialect.self, forKey: .dialect)
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        host = try c.decodeIfPresent(String.self, forKey: .host) ?? "localhost"
+        port = try c.decodeIfPresent(Int.self, forKey: .port) ?? dialect.defaultPort
+        user = try c.decodeIfPresent(String.self, forKey: .user) ?? ""
+        database = try c.decodeIfPresent(String.self, forKey: .database) ?? ""
+        filePath = try c.decodeIfPresent(String.self, forKey: .filePath) ?? ""
+        readOnly = try c.decodeIfPresent(Bool.self, forKey: .readOnly) ?? false
+        color = try c.decodeIfPresent(String.self, forKey: .color)
+        sslMode = try c.decodeIfPresent(SSLMode.self, forKey: .sslMode) ?? .prefer
+        sslRootCert = try c.decodeIfPresent(String.self, forKey: .sslRootCert) ?? ""
     }
 
     public var displayName: String {
@@ -58,12 +88,12 @@ public struct DataSourceConfig: Codable, Sendable, Identifiable, Hashable {
             return try await SQLiteConnection.open(path: path, readOnly: readOnly)
         case .postgres:
             let conn = try await PostgresConnection.connect(
-                host: host, port: port, user: user, password: password, database: database)
+                host: host, port: port, user: user, password: password, database: database, tls: tlsOptions)
             if readOnly { _ = try await conn.execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY") }
             return conn
         case .mysql:
             let conn = try await MySQLConnection.connect(
-                host: host, port: port, user: user, password: password, database: database)
+                host: host, port: port, user: user, password: password, database: database, tls: tlsOptions)
             if readOnly { _ = try await conn.execute("SET SESSION TRANSACTION READ ONLY") }
             return conn
         }

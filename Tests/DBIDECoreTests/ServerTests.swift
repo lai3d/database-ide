@@ -73,6 +73,17 @@ struct PostgresTests {
             #expect(e.position == 7)
         }
         #expect(try await c.strings("SELECT 41 + 1") == ["42"])
+
+        // Table editor submit: update + delete + insert in one transaction.
+        let page = try await c.execute(intro.selectSQL(tables[0], filter: "", orderBy: "id", limit: 10, offset: 0))
+        var edits = TableEdits()
+        edits.set(.text("12.25"), row: 0, column: 2, original: page.rows[0][2])
+        edits.set(.text("{x}"), row: 0, column: 6, original: page.rows[0][6])
+        edits.deletedRows.insert(1)
+        edits.insertedRows.append([.null, .text("c"), .null, .null, .null, .null, .null])
+        let dml = try edits.statements(table: tables[0], dialect: .postgres, columns: page.columns, rows: page.rows, primaryKey: ["id"])
+        try await TableEdits.apply(dml, on: c)
+        #expect(try await c.strings("SELECT name || ':' || coalesce(price::text, '') || ':' || coalesce(tags::text, '') FROM dbide_t.items ORDER BY id") == ["ä:12.25:{x}", "c::"])
         _ = try await c.execute("DROP SCHEMA dbide_t CASCADE")
         await c.close()
     }
@@ -142,6 +153,17 @@ struct MySQLTests {
 
         await #expect(throws: DatabaseError.self) { try await c.execute("SELEC 1") }
         #expect(try await c.strings("SELECT 41 + 1") == ["42"])
+
+        // Table editor submit; a no-op UPDATE still counts as 1 matched row (CLIENT_FOUND_ROWS).
+        let items = tables.first { $0.name == "items" }!
+        let page = try await c.execute(intro.selectSQL(items, filter: "", orderBy: "id", limit: 10, offset: 0))
+        var edits = TableEdits()
+        edits.set(.text("zz"), row: 0, column: 6, original: page.rows[0][6])
+        edits.set(.integer(4), row: 1, column: 3, original: .integer(-1))  // same value as stored
+        edits.insertedRows.append([.null, .text("c"), .null, .null, .null, .null, .null])
+        let dml = try edits.statements(table: items, dialect: .mysql, columns: page.columns, rows: page.rows, primaryKey: ["id"])
+        try await TableEdits.apply(dml, on: c)
+        #expect(try await c.strings("SELECT CONCAT(name, ':', qty, ':', IFNULL(note, '')) FROM items ORDER BY id") == ["ä:3:zz", "b:4:", "c:0:"])
         _ = try await c.execute("DROP TABLE items")
         await c.close()
     }
@@ -164,5 +186,98 @@ struct MySQLTests {
             _ = try await MySQLConnection.connect(
                 host: env.host, port: env.port, user: env.user, password: "wrong", database: "")
         }
+    }
+}
+
+@Suite(.enabled(if: ServerEnv.from("DBIDE_PG") != nil), .serialized)
+struct PostgresTLSTests {
+    let env = ServerEnv.from("DBIDE_PG")!
+    var ca: String? { ProcessInfo.processInfo.environment["DBIDE_PG_CA"] }
+
+    func connect(_ mode: SSLMode, root: String? = nil, host: String? = nil) async throws -> PostgresConnection {
+        try await PostgresConnection.connect(
+            host: host ?? env.host, port: env.port, user: env.user, password: env.password, database: env.database,
+            tls: TLSOptions(mode: mode, rootCertificatePath: root))
+    }
+
+    func usesSSL(_ c: PostgresConnection) async throws -> Bool {
+        try await c.strings("SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()") == ["true"]
+    }
+
+    @Test func modes() async throws {
+        let plain = try await connect(.disable)
+        #expect(plain.securityDescription == nil)
+        #expect(try await usesSSL(plain) == false)
+        await plain.close()
+
+        for mode in [SSLMode.prefer, .require] {
+            let c = try await connect(mode)
+            #expect(c.securityDescription?.hasPrefix("TLS") == true)
+            #expect(try await usesSSL(c))
+            // Big result over TLS (many records).
+            let n = try await c.execute("SELECT repeat('x', 1000) FROM generate_series(1, 2000)").rows.count
+            #expect(n == 2000)
+            await c.close()
+        }
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["DBIDE_PG_CA"] != nil))
+    func verification() async throws {
+        let full = try await connect(.verifyFull, root: ca, host: "localhost")
+        #expect(try await usesSSL(full))
+        await full.close()
+        let viaCA = try await connect(.verifyCA, root: ca, host: "127.0.0.1")
+        await viaCA.close()
+        // Self-signed certificate is not in the system trust store.
+        await #expect(throws: DatabaseError.self) { _ = try await connect(.verifyFull) }
+    }
+
+    @Test func cancelOverTLS() async throws {
+        let c = try await connect(.require)
+        let task = Task { try await c.execute("SELECT pg_sleep(30)") }
+        try await Task.sleep(for: .milliseconds(300))
+        c.cancel()
+        await #expect(throws: DatabaseError.self) { try await task.value }
+        #expect(try await c.strings("SELECT 1") == ["1"])
+        await c.close()
+    }
+}
+
+@Suite(.enabled(if: ServerEnv.from("DBIDE_MYSQL") != nil), .serialized)
+struct MySQLTLSTests {
+    let env = ServerEnv.from("DBIDE_MYSQL")!
+
+    func connect(_ mode: SSLMode, user: String? = nil, password: String? = nil) async throws -> MySQLConnection {
+        try await MySQLConnection.connect(
+            host: env.host, port: env.port, user: user ?? env.user, password: password ?? env.password,
+            database: "", tls: TLSOptions(mode: mode))
+    }
+
+    func cipher(_ c: MySQLConnection) async throws -> String {
+        try await c.execute("SHOW SESSION STATUS LIKE 'Ssl_cipher'").rows.first?[1].displayString ?? ""
+    }
+
+    @Test func requireAndFullAuth() async throws {
+        let c = try await connect(.require)
+        #expect(c.securityDescription != nil)
+        #expect(try await cipher(c) != "")
+
+        // Fresh caching_sha2 users force full authentication on first login:
+        // over TLS the password is sent as-is, without TLS it is RSA-encrypted.
+        for u in ["dbide_tls", "dbide_rsa"] {
+            _ = try await c.execute("DROP USER IF EXISTS '\(u)'@'%'")
+            _ = try await c.execute("CREATE USER '\(u)'@'%' IDENTIFIED WITH caching_sha2_password BY 'p@ss!'")
+        }
+        let tlsUser = try await connect(.require, user: "dbide_tls", password: "p@ss!")
+        #expect(try await cipher(tlsUser) != "")
+        await tlsUser.close()
+        let rsaUser = try await connect(.disable, user: "dbide_rsa", password: "p@ss!")
+        #expect(rsaUser.securityDescription == nil)
+        #expect(try await cipher(rsaUser) == "")
+        await rsaUser.close()
+
+        await #expect(throws: DatabaseError.self) { _ = try await connect(.verifyFull) }
+        for u in ["dbide_tls", "dbide_rsa"] { _ = try await c.execute("DROP USER '\(u)'@'%'") }
+        await c.close()
     }
 }

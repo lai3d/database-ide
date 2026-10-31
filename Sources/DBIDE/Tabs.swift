@@ -66,7 +66,8 @@ final class ConsoleModel: Identifiable {
         defer { isConnecting = false }
         let conn = try await ds.config.connect(password: Keychain.password(for: ds.config.id) ?? "")
         connection = conn
-        log.append(LogEntry(kind: .info, text: "Connected to \(ds.config.displayName) (\(conn.serverVersion))"))
+        let tls = conn.securityDescription.map { ", 🔒 \($0)" } ?? ""
+        log.append(LogEntry(kind: .info, text: "Connected to \(ds.config.displayName) (\(conn.serverVersion)\(tls))"))
         let intro = Introspector(conn)
         schemas = (try? await intro.schemas()) ?? []
         if let wanted = currentSchema, schemas.contains(wanted) {
@@ -241,10 +242,8 @@ final class TableDataModel: Identifiable {
     private(set) var primaryKey: [String] = []
     private var connection: (any DatabaseConnection)?
 
-    // Pending edits (DataGrip-style: edit, then Submit).
-    var edits: [Int: [Int: SQLValue]] = [:]
-    var deletedRows: Set<Int> = []
-    var insertedRows: [[SQLValue]] = []
+    /// Pending edits (DataGrip-style: edit, then Submit).
+    var pending = TableEdits()
 
     weak var app: AppModel?
 
@@ -256,7 +255,7 @@ final class TableDataModel: Identifiable {
     var title: String { table.name }
     var dialect: SQLDialect { app?.session(for: dataSourceID)?.config.dialect ?? .postgres }
     var isEditable: Bool { !primaryKey.isEmpty && table.kind == .table }
-    var hasPendingChanges: Bool { !edits.isEmpty || !deletedRows.isEmpty || !insertedRows.isEmpty }
+    var hasPendingChanges: Bool { !pending.isEmpty }
 
     private func ensureConnection() async throws -> any DatabaseConnection {
         if let connection { return connection }
@@ -312,107 +311,63 @@ final class TableDataModel: Identifiable {
     /// Value displayed for a cell, including pending edits. Rows past the result are inserted rows.
     func value(row: Int, column: Int) -> SQLValue {
         guard let result else { return .null }
-        if row >= result.rows.count { return insertedRows[row - result.rows.count][column] }
-        return edits[row]?[column] ?? result.rows[row][column]
+        if row >= result.rows.count { return pending.insertedRows[row - result.rows.count][column] }
+        return pending.updates[row]?[column] ?? result.rows[row][column]
     }
 
     func setValue(_ value: SQLValue, row: Int, column: Int) {
         guard let result else { return }
         if row >= result.rows.count {
-            insertedRows[row - result.rows.count][column] = value
-            return
-        }
-        if result.rows[row][column] == value {
-            edits[row]?[column] = nil
-            if edits[row]?.isEmpty == true { edits[row] = nil }
+            pending.insertedRows[row - result.rows.count][column] = value
         } else {
-            edits[row, default: [:]][column] = value
+            pending.set(value, row: row, column: column, original: result.rows[row][column])
         }
     }
 
     func addRow() {
         guard let result else { return }
-        insertedRows.append(Array(repeating: .null, count: result.columns.count))
+        pending.insertedRows.append(Array(repeating: .null, count: result.columns.count))
     }
 
     func deleteRows(_ rows: IndexSet) {
         guard let result else { return }
         for r in rows.sorted(by: >) {
             if r >= result.rows.count {
-                insertedRows.remove(at: r - result.rows.count)
+                pending.insertedRows.remove(at: r - result.rows.count)
             } else {
-                deletedRows.insert(r)
+                pending.deletedRows.insert(r)
             }
         }
     }
 
-    func discardChanges() {
-        edits = [:]
-        deletedRows = []
-        insertedRows = []
-    }
-
-    private func literal(_ v: SQLValue) -> String { ResultExport.sqlLiteral(v, dialect: dialect) }
+    func discardChanges() { pending = TableEdits() }
 
     /// SQL for the pending changes, in execution order.
     func pendingStatements() -> [String] {
         guard let result else { return [] }
-        let qt = dialect.qualified(schema: table.schema, name: table.name)
-        let names = result.columns.map(\.name)
-        func whereClause(_ row: Int) -> String {
-            primaryKey.compactMap { pk in
-                guard let i = names.firstIndex(of: pk) else { return nil }
-                let v = result.rows[row][i]
-                return v.isNull ? "\(dialect.quote(pk)) IS NULL" : "\(dialect.quote(pk)) = \(literal(v))"
-            }.joined(separator: " AND ")
+        do {
+            return try pending.statements(
+                table: table, dialect: dialect, columns: result.columns, rows: result.rows, primaryKey: primaryKey)
+        } catch {
+            return ["-- " + error.localizedDescription]
         }
-        var out: [String] = []
-        for row in deletedRows.sorted() {
-            out.append("DELETE FROM \(qt) WHERE \(whereClause(row))")
-        }
-        for (row, cols) in edits.sorted(by: { $0.key < $1.key }) where !deletedRows.contains(row) {
-            let sets = cols.sorted { $0.key < $1.key }.map { "\(dialect.quote(names[$0.key])) = \(literal($0.value))" }
-            out.append("UPDATE \(qt) SET \(sets.joined(separator: ", ")) WHERE \(whereClause(row))")
-        }
-        for row in insertedRows {
-            let pairs = zip(names, row).filter { !$0.1.isNull }
-            if pairs.isEmpty {
-                out.append(dialect == .mysql ? "INSERT INTO \(qt) () VALUES ()" : "INSERT INTO \(qt) DEFAULT VALUES")
-            } else {
-                out.append(
-                    "INSERT INTO \(qt) (\(pairs.map { dialect.quote($0.0) }.joined(separator: ", "))) VALUES (\(pairs.map { literal($0.1) }.joined(separator: ", ")))"
-                )
-            }
-        }
-        return out
     }
 
-    /// Applies pending changes in one transaction.
+    /// Applies pending changes in one transaction, then reloads.
     func submit() async {
-        let statements = pendingStatements()
-        guard !statements.isEmpty else { return }
+        guard let result, !pending.isEmpty else { return }
         isRunning = true
-        defer { isRunning = false }
         do {
+            let statements = try pending.statements(
+                table: table, dialect: dialect, columns: result.columns, rows: result.rows, primaryKey: primaryKey)
             let conn = try await ensureConnection()
-            _ = try await conn.execute(dialect == .mysql ? "START TRANSACTION" : "BEGIN")
-            do {
-                for sql in statements {
-                    let r = try await conn.execute(sql)
-                    if let n = r.affectedRows, n != 1 {
-                        throw DatabaseError("Expected to change 1 row but changed \(n):\n\(sql)")
-                    }
-                    app?.history.record(sql, dataSource: dataSourceID)
-                }
-                _ = try await conn.execute("COMMIT")
-            } catch {
-                _ = try? await conn.execute("ROLLBACK")
-                throw error
-            }
+            try await TableEdits.apply(statements, on: conn)
+            for sql in statements { app?.history.record(sql, dataSource: dataSourceID) }
             error = nil
             isRunning = false
             await reload()
         } catch {
+            isRunning = false
             self.error = error.localizedDescription
         }
     }

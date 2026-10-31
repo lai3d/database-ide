@@ -106,6 +106,14 @@ final class TCPSocket: @unchecked Sendable {
         return Array(buffer[bufferIndex..<bufferIndex + count])
     }
 
+    /// Returns between 1 and `max` bytes, blocking only if nothing is buffered.
+    func readSome(_ max: Int) throws -> [UInt8] {
+        if buffer.count - bufferIndex == 0 { try fill() }
+        let n = min(max, buffer.count - bufferIndex)
+        defer { bufferIndex += n }
+        return Array(buffer[bufferIndex..<bufferIndex + n])
+    }
+
     /// Unblocks any pending read/write; subsequent I/O fails.
     func shutdown() {
         lock.lock()

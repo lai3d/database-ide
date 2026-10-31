@@ -14,7 +14,7 @@ Estimates are Claude Code session time.
 - ✅ SQL lexer (highlighting) and statement splitter (dollar quotes, nested comments, trigger bodies, MySQL `DELIMITER`)
 - ✅ Introspection: schemas, tables / views, columns, indexes, routines, DDL (all three dialects)
 - ✅ Export: CSV / TSV / JSON / Markdown / SQL INSERT
-- ✅ Tests: unit tests + docker-backed PostgreSQL 16 / MySQL 8.4 driver tests (`scripts/test-servers.sh`)
+- ✅ Tests: unit tests + docker-backed PostgreSQL 16 (TLS) / MySQL 8.4 driver tests (`scripts/test-servers.sh`) — 29 tests
 
 ## Phase 1 — Core IDE (MVP)
 
@@ -27,14 +27,15 @@ Estimates are Claude Code session time.
 | 1.5 | ✅ Result grid | Tab per result set, NULL styling, sort, value viewer (pretty JSON), copy as TSV/CSV/JSON/Markdown/INSERT, export to file | 0.6h |
 | 1.6 | ✅ Completion | ⌃Space / Esc / after `.`: keywords, tables, columns, `alias.` columns | 0.3h |
 | 1.7 | ✅ Table data view | WHERE / ORDER BY filters, paging, row count | 0.3h |
-| 1.8 | 🚧 Table data editing | Edit cells, set NULL, add / delete rows, preview SQL, submit in one transaction — implemented; needs UI verification and unit tests for the generated SQL | 0.3h |
+| 1.8 | ✅ Table data editing | Edit cells, set NULL, add / delete rows, preview SQL, submit in one transaction (rolled back unless every statement hits exactly one row); `TableEdits` in Core with unit + PG/MySQL/SQLite tests | 0.3h |
 | 1.9 | ✅ DDL viewer, query history, persistence | History panel (⇧⌘E); consoles and their text survive restarts | 0.3h |
 
 ## Phase 2 — Connectivity
 
 | # | Item | Notes | Est. |
 |---|---|---|---|
-| 2.1 | ⬜ TLS | PostgreSQL `SSLRequest` + MySQL SSL upgrade (Network.framework / Security), sslmode options | 1–1.5h |
+| 2.1 | ✅ TLS | PostgreSQL `SSLRequest` + MySQL SSL upgrade; modes disable / prefer (default) / require / verify-ca / verify-full, custom root CA; 🔒 in explorer, Test Connection and console log. Tested against TLS-enabled PG 16 and MySQL 8.4 | 0.6h |
+| 2.1b | ⬜ TLS 1.3 | Current TLS layer is SecureTransport (TLS 1.2 max, deprecated by Apple); move to Network.framework with a STARTTLS framer | 0.8h |
 | 2.2 | ⬜ SSH tunnel | Via system `ssh -L` with key auth | 0.5h |
 | 2.3 | ⬜ Connection URL import | Paste `postgres://` / `mysql://` / JDBC URL to fill the form | 0.2h |
 | 2.4 | ⬜ More engines | MariaDB-specific tweaks, then maybe ClickHouse (HTTP) / SQL Server (TDS) | 1h+ each |

@@ -8,6 +8,9 @@ public final class MySQLConnection: DatabaseConnection, @unchecked Sendable {
     public let dialect = SQLDialect.mysql
     public private(set) var serverVersion = "MySQL"
     private let socket: TCPSocket
+    private var stream: any ByteStream
+    public private(set) var securityDescription: String?
+    private let tls: TLSOptions
     private let worker = SerialWorker(label: "dbide.mysql")
     private var sequence: UInt8 = 0
     private var threadID: UInt32 = 0
@@ -17,6 +20,7 @@ public final class MySQLConnection: DatabaseConnection, @unchecked Sendable {
     private static let longPassword: UInt32 = 0x1
     private static let foundRows: UInt32 = 0x2  // affected rows = matched rows
     private static let longFlag: UInt32 = 0x4
+    private static let clientSSL: UInt32 = 0x800
     private static let connectWithDB: UInt32 = 0x8
     private static let protocol41: UInt32 = 0x200
     private static let transactions: UInt32 = 0x2000
@@ -28,19 +32,22 @@ public final class MySQLConnection: DatabaseConnection, @unchecked Sendable {
     private static let moreResultsExist: UInt16 = 0x0008
 
     public static func connect(
-        host: String, port: Int = 3306, user: String, password: String, database: String
+        host: String, port: Int = 3306, user: String, password: String, database: String,
+        tls: TLSOptions = .disabled
     ) async throws -> MySQLConnection {
         try await SerialWorker(label: "dbide.mysql.connect").run {
-            try MySQLConnection(host: host, port: port, user: user, password: password, database: database)
+            try MySQLConnection(host: host, port: port, user: user, password: password, database: database, tls: tls)
         }
     }
 
-    private init(host: String, port: Int, user: String, password: String, database: String) throws {
+    private init(host: String, port: Int, user: String, password: String, database: String, tls: TLSOptions) throws {
         self.host = host
         self.port = port
         self.user = user
         self.password = password
+        self.tls = tls
         socket = try TCPSocket(host: host, port: port)
+        stream = socket
         do {
             try handshake(database: database)
         } catch {
@@ -54,10 +61,10 @@ public final class MySQLConnection: DatabaseConnection, @unchecked Sendable {
     private func readPacket() throws -> [UInt8] {
         var payload: [UInt8] = []
         while true {
-            let header = try socket.read(4)
+            let header = try stream.read(4)
             let length = Int(header[0]) | Int(header[1]) << 8 | Int(header[2]) << 16
             sequence = header[3] &+ 1
-            payload += try socket.read(length)
+            payload += try stream.read(length)
             if length < 0xFFFFFF { return payload }
         }
     }
@@ -71,7 +78,7 @@ public final class MySQLConnection: DatabaseConnection, @unchecked Sendable {
             w.u8(sequence)
             sequence &+= 1
             w.append(Array(payload[offset..<offset + chunk]))
-            try socket.write(w.bytes)
+            try stream.write(w.bytes)
             offset += chunk
             if chunk < 0xFFFFFF { break }
         } while true
@@ -123,6 +130,24 @@ public final class MySQLConnection: DatabaseConnection, @unchecked Sendable {
             | Self.pluginAuthLenenc
         if !database.isEmpty { flags |= Self.connectWithDB }
         flags &= caps | Self.connectWithDB
+
+        if tls.mode != .disable {
+            if caps & Self.clientSSL != 0 {
+                flags |= Self.clientSSL
+                // SSLRequest: the first 32 bytes of the handshake response, then upgrade.
+                var ssl = ByteWriter()
+                ssl.intLE(UInt64(flags), size: 4)
+                ssl.intLE(16 * 1024 * 1024, size: 4)
+                ssl.u8(45)
+                ssl.append([UInt8](repeating: 0, count: 23))
+                try writePacket(ssl.bytes)
+                let t = try TLSStream(socket: socket, host: host, options: tls)
+                stream = t
+                securityDescription = t.negotiatedDescription
+            } else if tls.mode.requiresTLS {
+                throw DatabaseError("Server does not support SSL, but SSL mode is \(tls.mode.rawValue)")
+            }
+        }
 
         let authResponse = try scrambleResponse(plugin: plugin, scramble: scramble)
         var w = ByteWriter()
@@ -188,7 +213,11 @@ public final class MySQLConnection: DatabaseConnection, @unchecked Sendable {
                 guard plugin == "caching_sha2_password" else { throw DatabaseError("Unexpected auth data") }
                 if packet.count >= 2, packet[1] == 0x03 { continue }  // fast auth OK; OK packet follows
                 if packet.count >= 2, packet[1] == 0x04 {
-                    try writePacket([0x02])  // request server public key
+                    if securityDescription != nil {
+                        try writePacket(Array(password.utf8) + [0])  // cleartext is fine over TLS
+                    } else {
+                        try writePacket([0x02])  // request server public key
+                    }
                     continue
                 }
                 // Public key (PEM) arrived.
@@ -319,10 +348,10 @@ public final class MySQLConnection: DatabaseConnection, @unchecked Sendable {
     private static func isEOF(_ p: [UInt8]) -> Bool { p.first == 0xFE && p.count < 9 }
 
     public func cancel() {
-        let host = host, port = port, user = user, password = password, id = threadID
+        let host = host, port = port, user = user, password = password, id = threadID, tls = tls
         Task.detached {
             guard let killer = try? await MySQLConnection.connect(
-                host: host, port: port, user: user, password: password, database: "")
+                host: host, port: port, user: user, password: password, database: "", tls: tls)
             else { return }
             _ = try? await killer.execute("KILL QUERY \(id)")
             await killer.close()

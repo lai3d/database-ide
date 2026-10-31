@@ -8,6 +8,8 @@ public final class PostgresConnection: DatabaseConnection, @unchecked Sendable {
     public let dialect = SQLDialect.postgres
     public private(set) var serverVersion = "PostgreSQL"
     private let socket: TCPSocket
+    private var stream: any ByteStream
+    public private(set) var securityDescription: String?
     private let worker = SerialWorker(label: "dbide.postgres")
     private let host: String
     private let port: Int
@@ -18,23 +20,44 @@ public final class PostgresConnection: DatabaseConnection, @unchecked Sendable {
     public private(set) var notices: [String] = []
 
     public static func connect(
-        host: String, port: Int = 5432, user: String, password: String, database: String
+        host: String, port: Int = 5432, user: String, password: String, database: String,
+        tls: TLSOptions = .disabled
     ) async throws -> PostgresConnection {
         let worker = SerialWorker(label: "dbide.postgres.connect")
         return try await worker.run {
-            try PostgresConnection(host: host, port: port, user: user, password: password, database: database)
+            try PostgresConnection(host: host, port: port, user: user, password: password, database: database, tls: tls)
         }
     }
 
-    private init(host: String, port: Int, user: String, password: String, database: String) throws {
+    private init(host: String, port: Int, user: String, password: String, database: String, tls: TLSOptions) throws {
         self.host = host
         self.port = port
         socket = try TCPSocket(host: host, port: port)
+        stream = socket
         do {
+            try negotiateTLS(tls)
             try startup(user: user, password: password, database: database.isEmpty ? user : database)
         } catch {
             socket.close()
             throw error
+        }
+    }
+
+    // MARK: TLS
+
+    private func negotiateTLS(_ tls: TLSOptions) throws {
+        guard tls.mode != .disable else { return }
+        var w = ByteWriter()
+        w.int32BE(8)
+        w.int32BE(80877103)  // SSLRequest
+        try socket.write(w.bytes)
+        let answer = try socket.read(1)[0]
+        if answer == UInt8(ascii: "S") {
+            let t = try TLSStream(socket: socket, host: host, options: tls)
+            stream = t
+            securityDescription = t.negotiatedDescription
+        } else if tls.mode.requiresTLS {
+            throw DatabaseError("Server does not support SSL, but SSL mode is \(tls.mode.rawValue)")
         }
     }
 
@@ -45,16 +68,16 @@ public final class PostgresConnection: DatabaseConnection, @unchecked Sendable {
         w.u8(type)
         w.int32BE(Int32(payload.count + 4))
         w.append(payload)
-        try socket.write(w.bytes)
+        try stream.write(w.bytes)
     }
 
     private func receive() throws -> (type: UInt8, body: ByteReader) {
-        let header = try socket.read(5)
+        let header = try stream.read(5)
         var r = ByteReader(header)
         let type = try r.u8()
         let length = Int(try r.int32BE())
         guard length >= 4 else { throw DatabaseError("Malformed PostgreSQL message") }
-        return (type, ByteReader(try socket.read(length - 4)))
+        return (type, ByteReader(try stream.read(length - 4)))
     }
 
     private static func parseError(_ body: ByteReader) -> DatabaseError {
@@ -88,7 +111,7 @@ public final class PostgresConnection: DatabaseConnection, @unchecked Sendable {
         var msg = ByteWriter()
         msg.int32BE(Int32(p.bytes.count + 4))
         msg.append(p.bytes)
-        try socket.write(msg.bytes)
+        try stream.write(msg.bytes)
 
         var scram: SCRAMClient?
         while true {
@@ -261,7 +284,7 @@ public final class PostgresConnection: DatabaseConnection, @unchecked Sendable {
     }
 
     public func close() async {
-        try? socket.write([UInt8(ascii: "X"), 0, 0, 0, 4])
+        try? stream.write([UInt8(ascii: "X"), 0, 0, 0, 4])
         socket.close()
     }
 }

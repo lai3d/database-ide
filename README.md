@@ -8,6 +8,7 @@ A native macOS database IDE in the spirit of JetBrains DataGrip, written in Swif
 
 - **Data sources**: SQLite, PostgreSQL, MySQL/MariaDB. All wire protocols are implemented in Swift
   (PostgreSQL SCRAM-SHA-256/MD5, MySQL caching_sha2_password/native_password). Passwords live in the Keychain.
+  TLS with libpq-style modes (disable / prefer / require / verify-ca / verify-full) and an optional root CA.
 - **Database Explorer**: data sources → schemas → tables / views / routines → columns (PK, type, nullability) and indexes.
   Filter box, context menus (open data, show DDL, SELECT in console, copy names, drop).
 - **Query console**: SQL highlighting, line numbers, ⌘↩ runs the statement at the caret (or the selection),
@@ -37,7 +38,7 @@ swift test                    # unit tests + SQLite
 
 ## Limitations
 
-- No TLS yet: servers must accept unencrypted connections (`sslmode=disable` equivalent).
+- TLS is limited to TLS 1.2 (SecureTransport); servers that only accept TLS 1.3 won't connect yet.
 - No SSH tunnels; text-protocol results only.
 
 See [ROADMAP.md](ROADMAP.md) for what is done and what is next.

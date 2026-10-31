@@ -31,6 +31,7 @@ final class DataSourceSession {
     private(set) var schemas: [SchemaNode] = []
     private(set) var defaultSchema: String?
     var serverVersion: String { connection?.serverVersion ?? "" }
+    var securityDescription: String? { connection?.securityDescription }
 
     init(config: DataSourceConfig) { self.config = config }
 

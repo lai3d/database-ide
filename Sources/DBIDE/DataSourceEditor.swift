@@ -47,6 +47,20 @@ struct DataSourceEditor: View {
                         .onChange(of: password) { passwordChanged = true }
                     TextField("Database", text: $config.database, prompt: Text(config.dialect == .mysql ? "optional" : config.user))
                 }
+                if config.dialect != .sqlite {
+                    Section("SSL / TLS") {
+                        Picker("Mode", selection: $config.sslMode) {
+                            ForEach(SSLMode.allCases, id: \.self) { Text($0.title).tag($0) }
+                        }
+                        Text(sslHelp).font(.caption).foregroundStyle(.secondary)
+                        if config.sslMode == .verifyCA || config.sslMode == .verifyFull {
+                            HStack {
+                                TextField("Root CA", text: $config.sslRootCert, prompt: Text("system trust store"))
+                                Button("Choose…") { chooseRootCert() }
+                            }
+                        }
+                    }
+                }
                 Toggle("Read-only", isOn: $config.readOnly)
             }
             .formStyle(.grouped)
@@ -78,14 +92,34 @@ struct DataSourceEditor: View {
         .frame(width: 520)
     }
 
+    private var sslHelp: String {
+        switch config.sslMode {
+        case .disable: "Never encrypt the connection."
+        case .prefer: "Encrypt when the server supports it; certificate not checked."
+        case .require: "Always encrypt; certificate not checked."
+        case .verifyCA: "Always encrypt; certificate must chain to a trusted root."
+        case .verifyFull: "Always encrypt; certificate must be trusted and match the host name."
+        }
+    }
+
+    private func chooseRootCert() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.message = "Choose a PEM file with the root certificate(s)"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        config.sslRootCert = url.path
+    }
+
     private func test() async {
         testState = .testing
         let pw = isNew || passwordChanged ? password : (Keychain.password(for: config.id) ?? "")
         do {
             let conn = try await config.connect(password: pw)
             let version = conn.serverVersion
+            let tls = conn.securityDescription.map { " · 🔒 \($0)" } ?? (config.dialect == .sqlite ? "" : " · not encrypted")
             await conn.close()
-            testState = .ok("Connected · \(version)")
+            testState = .ok("Connected · \(version)\(tls)")
         } catch {
             testState = .failed(error.localizedDescription)
         }

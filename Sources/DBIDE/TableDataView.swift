@@ -146,15 +146,15 @@ struct TableDataView: View {
         let base = result.rows.count
         return GridSource(
             columns: result.columns,
-            rowCount: base + m.insertedRows.count,
+            rowCount: base + m.pending.insertedRows.count,
             version: editVersion &+ result.rows.count &* 31 &+ Int(result.duration * 1e6),
             dialect: m.dialect,
             tableName: m.dialect.qualified(schema: m.table.schema, name: m.table.name),
             value: { r, c in m.value(row: r, column: c) },
             rowState: { r in
-                r >= base ? .inserted : m.deletedRows.contains(r) ? .deleted : m.edits[r] != nil ? .edited : .normal
+                r >= base ? .inserted : m.pending.deletedRows.contains(r) ? .deleted : m.pending.updates[r] != nil ? .edited : .normal
             },
-            isCellEdited: { r, c in m.edits[r]?[c] != nil },
+            isCellEdited: { r, c in m.pending.updates[r]?[c] != nil },
             onEdit: m.isEditable
                 ? { r, c, v in
                     m.setValue(v, row: r, column: c)

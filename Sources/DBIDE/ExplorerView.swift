@@ -212,13 +212,22 @@ private struct DataSourceRow: View {
                     Text(session.config.subtitle).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 0)
+                if session.securityDescription != nil {
+                    Image(systemName: "lock.fill").font(.caption2).foregroundStyle(.secondary)
+                }
                 Circle()
                     .fill(statusColor)
                     .frame(width: 7, height: 7)
-                    .help(session.isConnected ? session.serverVersion : "")
+                    .help(statusHelp)
             }
         }
         .tag(ExplorerNode.dataSource(session.config.id))
+    }
+
+    private var statusHelp: String {
+        guard session.isConnected else { return "" }
+        let tls = session.securityDescription.map { "\n🔒 \($0)" } ?? (session.config.dialect == .sqlite ? "" : "\nNot encrypted")
+        return session.serverVersion + tls
     }
 
     private var statusColor: Color {

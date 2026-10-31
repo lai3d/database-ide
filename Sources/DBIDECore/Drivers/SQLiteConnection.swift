@@ -7,6 +7,7 @@ private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.sel
 public final class SQLiteConnection: DatabaseConnection, @unchecked Sendable {
     public let dialect = SQLDialect.sqlite
     public let serverVersion: String
+    public let securityDescription: String? = nil
     private var db: OpaquePointer?
     private let worker = SerialWorker(label: "dbide.sqlite")
     public let path: String

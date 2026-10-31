@@ -174,6 +174,8 @@ public protocol DatabaseConnection: AnyObject, Sendable {
     var dialect: SQLDialect { get }
     /// Server product/version string, for display.
     var serverVersion: String { get }
+    /// TLS details when the session is encrypted, nil for plaintext / local files.
+    var securityDescription: String? { get }
     /// Executes a single statement. Result sets beyond `maxRows` are drained and dropped.
     func execute(_ sql: String, maxRows: Int) async throws -> QueryResult
     /// Best-effort cancel of the statement currently running. Safe from any thread.
