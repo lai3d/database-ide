@@ -14,6 +14,12 @@ public enum SQLClassifier {
 
     public static func isReadOnly(_ sql: String, dialect: SQLDialect = .postgres) -> Bool {
         if dialect == .mongodb { return isMongoReadOnly(sql) }
+        if dialect == .redis {
+            return sql.split(whereSeparator: \.isNewline).allSatisfy { line in
+                let word = line.split(separator: " ").first.map { $0.uppercased() } ?? ""
+                return word.isEmpty || word.hasPrefix("#") || SQLKeywords.redisReadOnly.contains(word)
+            }
+        }
         let ns = sql as NSString
         let words = SQLLexer.tokenize(sql, dialect: dialect)
             .filter { $0.kind == .keyword || $0.kind == .identifier }

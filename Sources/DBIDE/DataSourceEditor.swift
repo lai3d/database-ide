@@ -39,7 +39,7 @@ struct DataSourceEditor: View {
                 }
                 .onChange(of: config.dialect) { old, new in
                     if config.port == old.defaultPort || config.port == 0 { config.port = new.defaultPort }
-                    if new == .mongodb, config.sslMode == .prefer { config.sslMode = .disable }
+                    if [.mongodb, .redis, .clickhouse].contains(new), config.sslMode == .prefer { config.sslMode = .disable }
                 }
                 TextField("Name", text: $config.name, prompt: Text(config.displayName))
                 HStack {
@@ -70,11 +70,11 @@ struct DataSourceEditor: View {
                                 .frame(width: 110)
                         }
                     }
-                    TextField("User", text: $config.user)
+                    TextField("User", text: $config.user, prompt: Text(config.dialect == .redis ? "default (optional, ACL)" : ""))
                     SecureField("Password", text: $password, prompt: Text(isNew || passwordChanged ? "" : "•••••• (stored in Keychain)"))
                         .onChange(of: password) { passwordChanged = true }
                     TextField("Database", text: $config.database,
-                              prompt: Text(config.dialect == .mysql ? "optional" : config.dialect == .mongodb ? "test" : config.user))
+                              prompt: Text(config.dialect == .mysql ? "optional" : config.dialect == .mongodb ? "test" : config.dialect == .redis ? "0" : config.dialect == .clickhouse ? "default" : config.dialect == .sqlserver ? "master" : config.user))
                     if config.dialect == .mongodb {
                         TextField("Auth source", text: $config.authSource, prompt: Text("admin"))
                     }
@@ -162,7 +162,8 @@ struct DataSourceEditor: View {
     private var sslHelp: String {
         switch config.sslMode {
         case .disable: "Never encrypt the connection."
-        case .prefer where config.dialect == .mongodb: "MongoDB has no TLS negotiation: Prefer connects without TLS. Use Require for TLS."
+        case .prefer where [.mongodb, .redis, .clickhouse].contains(config.dialect):
+            "\(config.dialect.displayName) has no TLS negotiation: Prefer connects without TLS. Use Require for TLS."
         case .prefer: "Encrypt when the server supports it; certificate not checked."
         case .require: "Always encrypt; certificate not checked."
         case .verifyCA: "Always encrypt; certificate must chain to a trusted root."

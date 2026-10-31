@@ -63,7 +63,12 @@ public enum SQLLexer {
             if isIdentStart(c) {
                 while i < n, isIdentPart(s[i]) { i += 1 }
                 let raw = String(utf16CodeUnits: Array(s[start..<i]), count: i - start)
-                let isKeyword = dialect == .mongodb ? SQLKeywords.mongo.contains(raw) : SQLKeywords.all.contains(raw.uppercased())
+                let isKeyword =
+                    switch dialect {
+                    case .mongodb: SQLKeywords.mongo.contains(raw)
+                    case .redis: SQLKeywords.redis.contains(raw.uppercased())
+                    default: SQLKeywords.all.contains(raw.uppercased())
+                    }
                 let kind: SQLTokenKind = isKeyword ? .keyword : .identifier
                 tokens.append(SQLToken(kind: kind, location: start, length: i - start))
                 continue
@@ -76,7 +81,7 @@ public enum SQLLexer {
             // Bind parameters: ?, :name, @var, $1 (but not the `::` cast operator).
             let next: UInt16 = i + 1 < n ? s[i + 1] : 0
             let afterColon = i > 0 && s[i - 1] == ch(":")
-            let isParam = dialect != .mongodb && (
+            let isParam = dialect != .mongodb && dialect != .redis && (
                 c == ch("?")
                 || (c == ch(":") && !afterColon && isIdentStart(next))
                 || (c == ch("@") && isIdentPart(next))

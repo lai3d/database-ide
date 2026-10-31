@@ -478,7 +478,13 @@ public struct Introspector: Sendable {
     // MARK: Data
 
     /// SELECT used by the table data editor.
+    /// Command that shows a Redis key's value (type taken from the explorer listing).
+    public static func redisBrowseCommand(_ table: TableInfo, limit: Int = 500) -> String {
+        RedisIntrospection.browseCommand(table, limit: limit, offset: 0)
+    }
+
     public func selectSQL(_ table: TableInfo, filter: String, orderBy: String, limit: Int, offset: Int) -> String {
+        if dialect == .redis { return RedisIntrospection.browseCommand(table, limit: limit, offset: offset) }
         if dialect == .mongodb {
             let f = filter.trimmingCharacters(in: .whitespacesAndNewlines)
             let o = orderBy.trimmingCharacters(in: .whitespacesAndNewlines)

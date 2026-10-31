@@ -128,7 +128,9 @@ public struct DataSourceConfig: Codable, Sendable, Identifiable, Hashable {
         case .sqlserver:
             throw DatabaseError("SQL Server driver not available yet")
         case .redis:
-            throw DatabaseError("Redis driver not available yet")
+            let (h, p, tls) = try await endpoint()
+            return try await RedisConnection.connect(
+                host: h, port: p, user: user, password: password, database: Int(database.replacingOccurrences(of: "db", with: "")) ?? 0, tls: tls)
         }
     }
 

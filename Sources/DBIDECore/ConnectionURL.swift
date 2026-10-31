@@ -29,6 +29,8 @@ public enum ConnectionURL {
         case "mysql", "mariadb", "mysqlx": dialect = .mysql
         case "mongodb", "mongodb+srv": dialect = .mongodb
         case "clickhouse", "ch": dialect = .clickhouse
+        case "redis", "rediss": dialect = .redis
+        case "sqlserver", "mssql": dialect = .sqlserver
         case "sqlite", "sqlite3", "file":
             let path = String(text[schemeEnd.upperBound...])
             return path.isEmpty ? nil : sqlite(path: path.removingPercentEncoding ?? path)
@@ -93,6 +95,10 @@ public enum ConnectionURL {
             config.sslMode = ["true", "1", "require", "required"].contains(ssl.lowercased()) ? .require : .disable
         }
         if let root = query["sslrootcert"] ?? query["ssl-ca"] ?? query["tlscafile"] { config.sslRootCert = root }
+        if dialect == .redis {
+            config.sslMode = scheme == "rediss" ? .require : .disable
+            if config.database.isEmpty { config.database = "0" }
+        }
         if dialect == .mongodb {
             config.srv = scheme == "mongodb+srv"
             if config.srv { config.port = 27017 }

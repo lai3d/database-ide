@@ -61,6 +61,7 @@ public enum SQLCompletion {
         text: String, caret: Int, dialect: SQLDialect, catalog: CompletionCatalog, limit: Int = 200
     ) -> SQLCompletionResult {
         if dialect == .mongodb { return MongoCompletion.complete(text: text, caret: caret, catalog: catalog) }
+        if dialect == .redis { return redisComplete(text: text, caret: caret, catalog: catalog) }
         let ns = text as NSString
         let caret = min(max(0, caret), ns.length)
         // Partial word before the caret.
@@ -165,6 +166,33 @@ public enum SQLCompletion {
         }
         ranked.sort { ($0.0, $0.1) < ($1.0, $1.1) }
         result.items = ranked.prefix(limit).map(\.2)
+        return result
+    }
+
+    /// Redis: command names for the first word of a line, key names afterwards.
+    static func redisComplete(text: String, caret: Int, catalog: CompletionCatalog) -> SQLCompletionResult {
+        let ns = text as NSString
+        let caret = min(max(0, caret), ns.length)
+        var start = caret
+        while start > 0, let u = UnicodeScalar(ns.character(at: start - 1)), !CharacterSet.whitespacesAndNewlines.contains(u) { start -= 1 }
+        let prefix = ns.substring(with: NSRange(location: start, length: caret - start))
+        var result = SQLCompletionResult(replaceRange: NSRange(location: start, length: caret - start), items: [])
+        let lineStart = ns.substring(to: start).components(separatedBy: "\n").last ?? ""
+        let isFirstWord = lineStart.trimmingCharacters(in: .whitespaces).isEmpty
+        var items: [SQLCompletionItem]
+        if isFirstWord {
+            let lower = prefix.first?.isLowercase ?? false
+            items = SQLKeywords.redisCommands.map { SQLCompletionItem(label: lower ? $0.lowercased() : $0, kind: .keyword) }
+        } else {
+            let schema = catalog.defaultSchema ?? ""
+            if catalog.tables[schema] == nil, !schema.isEmpty { result.missingSchemas.insert(schema) }
+            items = (catalog.tables[schema] ?? []).map {
+                SQLCompletionItem(label: $0.name, kind: .table, detail: $0.comment, insertText: $0.name.contains(" ") ? SQLDialect.redis.literal($0.name) : $0.name)
+            }
+        }
+        guard !prefix.isEmpty || !isFirstWord else { return result }
+        let p = prefix.lowercased()
+        result.items = Array(items.filter { p.isEmpty || $0.label.lowercased().hasPrefix(p) }.filter { $0.label != prefix }.prefix(200))
         return result
     }
 

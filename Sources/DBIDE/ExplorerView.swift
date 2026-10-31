@@ -137,7 +137,7 @@ struct ExplorerView: View {
                     } else {
                         Button("Connect") { Task { await ds.connect() } }
                     }
-                    if ds.isConnected, let schema = ds.defaultSchema ?? ds.schemas.first?.name {
+                    if ds.isConnected, ds.config.dialect != .redis, let schema = ds.defaultSchema ?? ds.schemas.first?.name {
                         if ds.config.dialect.isSQL {
                             Button("Show ER Diagram") { app.openDiagram(schema: schema, in: ds) }
                             Button("New Table…") { app.tableDesign = TableDesignTarget(session: ds, schema: schema, table: nil) }
@@ -174,8 +174,10 @@ struct ExplorerView: View {
                         Button("Show ER Diagram") { app.openDiagram(schema: schema, in: ds) }
                         Button("New Table…") { app.tableDesign = TableDesignTarget(session: ds, schema: schema, table: nil) }
                     }
-                    Button("Import CSV as New Table…") {
-                        app.csvImport = CSVImportTarget(session: ds, schema: schema, table: nil)
+                    if ds.config.dialect != .redis {
+                        Button("Import CSV as New Table…") {
+                            app.csvImport = CSVImportTarget(session: ds, schema: schema, table: nil)
+                        }
                     }
                     Button("Copy Name") { copy(schema) }
                 }
@@ -186,12 +188,16 @@ struct ExplorerView: View {
                     if t.kind == .table, ds.config.dialect.isSQL {
                         Button("Modify Table…") { app.tableDesign = TableDesignTarget(session: ds, schema: t.schema, table: t) }
                     }
-                    if t.kind == .table {
+                    if t.kind == .table, ds.config.dialect != .redis {
                         Button("Import CSV…") { app.csvImport = CSVImportTarget(session: ds, schema: t.schema, table: t) }
                     }
                     Divider()
                     let q = ds.config.dialect.qualified(schema: t.schema, name: t.name)
-                    if ds.config.dialect == .mongodb {
+                    if ds.config.dialect == .redis {
+                        Button("Show in Console") {
+                            app.insertIntoConsole(Introspector.redisBrowseCommand(t), dataSource: id)
+                        }
+                    } else if ds.config.dialect == .mongodb {
                         Button("Query in Console") {
                             app.insertIntoConsole("db.getCollection(\(SQLDialect.mongodb.literal(t.name))).find({})", dataSource: id)
                         }
@@ -201,8 +207,9 @@ struct ExplorerView: View {
                     Button("Copy Name") { copy(t.name) }
                     Button("Copy Qualified Name") { copy(q) }
                     Divider()
-                    Button("Drop \(ds.config.dialect == .mongodb ? "Collection" : t.kind == .table ? "Table" : "View")…", role: .destructive) {
+                    Button("Drop \(ds.config.dialect == .redis ? "Key" : ds.config.dialect == .mongodb ? "Collection" : t.kind == .table ? "Table" : "View")…", role: .destructive) {
                         app.insertIntoConsole(
+                            ds.config.dialect == .redis ? "DEL \(SQLDialect.redis.literal(t.name))" :
                             ds.config.dialect == .mongodb
                                 ? "db.getCollection(\(SQLDialect.mongodb.literal(t.name))).drop()"
                                 : "DROP \(t.kind == .table ? "TABLE" : "VIEW") \(q);", dataSource: id)
@@ -404,7 +411,7 @@ private struct SchemaContents: View {
             let visible = filter.isEmpty ? tables : tables.filter { $0.name.localizedCaseInsensitiveContains(filter) }
             let plain = visible.filter { $0.kind == .table }
             let views = visible.filter { $0.kind != .table }
-            folder(session.config.dialect == .mongodb ? "collections" : "tables", count: plain.count) {
+            folder(session.config.dialect == .mongodb ? "collections" : session.config.dialect == .redis ? "keys" : "tables", count: plain.count) {
                 ForEach(plain) { TableRow(session: session, schema: schema, table: $0, expanded: $expanded) }
             }
             if !views.isEmpty {

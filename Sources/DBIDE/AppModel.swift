@@ -81,6 +81,9 @@ final class AppModel {
         if dialect == .postgres { c.user = "postgres"; c.database = "postgres" }
         if dialect == .mysql { c.user = "root" }
         if dialect == .mongodb { c.sslMode = .disable; c.database = "test" }
+        if dialect == .redis { c.sslMode = .disable; c.database = "0" }
+        if dialect == .clickhouse { c.sslMode = .disable; c.user = "default"; c.database = "default" }
+        if dialect == .sqlserver { c.user = "sa"; c.database = "master" }
         editingDataSource = c
         editingIsNew = true
     }

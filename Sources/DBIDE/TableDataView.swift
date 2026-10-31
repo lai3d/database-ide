@@ -11,8 +11,10 @@ struct TableDataView: View {
     var body: some View {
         VStack(spacing: 0) {
             toolbar
-            Divider()
-            filters
+            if model.dialect != .redis {
+                Divider()
+                filters
+            }
             Divider()
             if let error = model.error {
                 Text(error)
@@ -54,8 +56,10 @@ struct TableDataView: View {
             .labelsHidden()
             .fixedSize()
             .onChange(of: model.pageSize) { Task { await model.reload(resetPage: true) } }
-            Button("Count") { Task { await model.countRows() } }
-                .help("Count rows matching the filter")
+            if model.dialect != .redis {
+                Button("Count") { Task { await model.countRows() } }
+                    .help("Count rows matching the filter")
+            }
             Divider().frame(height: 16)
             if model.isEditable {
                 Button { model.addRow(); editVersion += 1 } label: { Image(systemName: "plus") }
