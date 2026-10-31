@@ -14,7 +14,7 @@ Estimates are Claude Code session time.
 - ✅ SQL lexer (highlighting) and statement splitter (dollar quotes, nested comments, trigger bodies, MySQL `DELIMITER`)
 - ✅ Introspection: schemas, tables / views, columns, indexes, routines, DDL (all three dialects)
 - ✅ Export: CSV / TSV / JSON / Markdown / SQL INSERT
-- ✅ Tests: unit tests + docker-backed PostgreSQL 16 (TLS) / MySQL 8.4 / SSH bastion tests (`scripts/test-servers.sh`) — 79 tests
+- ✅ Tests: unit tests + docker-backed PostgreSQL 16 (TLS) / MySQL 8.4 / SSH bastion tests (`scripts/test-servers.sh`) — 76 tests
 
 ## Phase 1 — Core IDE (MVP)
 
