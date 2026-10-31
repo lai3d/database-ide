@@ -19,6 +19,8 @@ public struct DataSourceConfig: Codable, Sendable, Identifiable, Hashable {
     /// Root CA (PEM) used for verify-ca / verify-full; empty = system trust store.
     public var sslRootCert: String
     public var ssh: SSHConfig
+    /// Ask before running statements that modify data or schema (for production data sources).
+    public var confirmWrites: Bool
 
     public var tlsOptions: TLSOptions {
         TLSOptions(mode: sslMode, rootCertificatePath: sslRootCert.isEmpty ? nil : sslRootCert)
@@ -28,7 +30,7 @@ public struct DataSourceConfig: Codable, Sendable, Identifiable, Hashable {
         id: UUID = UUID(), name: String = "", dialect: SQLDialect = .postgres, host: String = "localhost",
         port: Int? = nil, user: String = "", database: String = "", filePath: String = "",
         readOnly: Bool = false, color: String? = nil, sslMode: SSLMode = .prefer, sslRootCert: String = "",
-        ssh: SSHConfig = SSHConfig()
+        ssh: SSHConfig = SSHConfig(), confirmWrites: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -43,10 +45,11 @@ public struct DataSourceConfig: Codable, Sendable, Identifiable, Hashable {
         self.sslMode = sslMode
         self.sslRootCert = sslRootCert
         self.ssh = ssh
+        self.confirmWrites = confirmWrites
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, dialect, host, port, user, database, filePath, readOnly, color, sslMode, sslRootCert, ssh
+        case id, name, dialect, host, port, user, database, filePath, readOnly, color, sslMode, sslRootCert, ssh, confirmWrites
     }
 
     /// Tolerates fields added in later versions being absent from saved state.
@@ -65,6 +68,7 @@ public struct DataSourceConfig: Codable, Sendable, Identifiable, Hashable {
         sslMode = try c.decodeIfPresent(SSLMode.self, forKey: .sslMode) ?? .prefer
         sslRootCert = try c.decodeIfPresent(String.self, forKey: .sslRootCert) ?? ""
         ssh = try c.decodeIfPresent(SSHConfig.self, forKey: .ssh) ?? SSHConfig()
+        confirmWrites = try c.decodeIfPresent(Bool.self, forKey: .confirmWrites) ?? false
     }
 
     public var displayName: String {

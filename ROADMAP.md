@@ -66,7 +66,8 @@ Estimates are Claude Code session time.
 | # | Item | Notes | Est. |
 |---|---|---|---|
 | 5.1 | ⬜ Settings | Fonts, default row limit, confirm-on-DML for read-write prod data sources | 0.4h |
-| 5.2 | ⬜ Data source colors / folders | Color tag on tabs (e.g. red for production), grouping | 0.3h |
+| 5.2 | ✅ Data source colors & write guard | Color tag (e.g. red = production) on tabs, console toolbar and explorer; optional "confirm before modifying data" — classifies statements (data-modifying CTEs, SELECT INTO, EXPLAIN ANALYZE DML…) and asks before console runs and table-editor submits | 0.3h |
+| 5.2b | ⬜ Data source folders | Group data sources in the explorer | 0.2h |
 | 5.3 | ⬜ CI & packaging | GitHub Actions build + unit tests (+ docker service containers), app icon, release `.app` zip | 0.5h |
 
 **User must do manually** (duration outside Claude's control): Apple Developer Program enrollment,

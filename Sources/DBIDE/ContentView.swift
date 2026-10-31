@@ -94,6 +94,16 @@ private struct TabButton: View {
         .overlay(alignment: .bottom) {
             if selected { Rectangle().fill(Color.accentColor).frame(height: 2) }
         }
+        .overlay(alignment: .top) {
+            if let c = app.session(for: tab.dataSourceID).flatMap({ DataSourceColor.of($0.config) }) {
+                Rectangle().fill(c).frame(height: 3)
+            }
+        }
+        .background {
+            if let c = app.session(for: tab.dataSourceID).flatMap({ DataSourceColor.of($0.config) }) {
+                c.opacity(0.10)
+            }
+        }
         .contentShape(Rectangle())
         .onTapGesture { app.selectedTabID = tab.id }
         .onHover { hovering = $0 }

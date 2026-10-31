@@ -60,6 +60,10 @@ struct ConsoleView: View {
                 HStack(spacing: 4) {
                     DialectIcon(dialect: ds.config.dialect)
                     Text(ds.config.displayName).lineLimit(1)
+                    if ds.config.confirmWrites {
+                        Image(systemName: "shield.lefthalf.filled").foregroundStyle(.orange)
+                            .help("Changes on this data source require confirmation")
+                    }
                 }
             }
             if console.dialect != .sqlite, !console.schemas.isEmpty {
@@ -118,6 +122,9 @@ struct ConsoleView: View {
         .controlSize(.small)
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
+        .background {
+            if let c = console.dataSource.flatMap({ DataSourceColor.of($0.config) }) { c.opacity(0.12) }
+        }
     }
 }
 

@@ -142,6 +142,10 @@ final class ConsoleModel: Identifiable {
     }
 
     func execute(_ statements: [SQLStatement]) async {
+        if let config = dataSource?.config, !confirmWrites(statements.map(\.text), on: config) {
+            log.append(LogEntry(kind: .info, text: "Cancelled — data source requires confirmation for changes"))
+            return
+        }
         isRunning = true
         errorRange = nil
         defer {
@@ -439,6 +443,10 @@ final class TableDataModel: Identifiable {
         do {
             let statements = try pending.statements(
                 table: table, dialect: dialect, columns: result.columns, rows: result.rows, primaryKey: primaryKey)
+            if let config = app?.session(for: dataSourceID)?.config, !confirmWrites(statements, on: config) {
+                isRunning = false
+                return
+            }
             let conn = try await ensureConnection()
             try await TableEdits.apply(statements, on: conn)
             for sql in statements { app?.history.record(sql, dataSource: dataSourceID) }

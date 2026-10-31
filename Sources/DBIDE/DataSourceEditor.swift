@@ -90,7 +90,25 @@ struct DataSourceEditor: View {
                         }
                     }
                 }
-                Toggle("Read-only", isOn: $config.readOnly)
+                Section("Safety") {
+                    Picker("Color", selection: Binding(
+                        get: { DataSourceColor(rawValue: config.color ?? "") ?? .none },
+                        set: { config.color = $0 == .none ? nil : $0.rawValue })
+                    ) {
+                        ForEach(DataSourceColor.allCases) { c in
+                            HStack {
+                                if let color = c.color {
+                                    Image(systemName: "circle.fill").foregroundStyle(color)
+                                }
+                                Text(c.title)
+                            }
+                            .tag(c)
+                        }
+                    }
+                    Toggle("Confirm before modifying data", isOn: $config.confirmWrites)
+                    Toggle("Read-only", isOn: $config.readOnly)
+                    Text("Tip: mark production red and turn on confirmation.").font(.caption).foregroundStyle(.secondary)
+                }
             }
             .formStyle(.grouped)
 

@@ -206,6 +206,9 @@ private struct DataSourceRow: View {
             }
         } label: {
             HStack(spacing: 6) {
+                if let c = DataSourceColor.of(session.config) {
+                    RoundedRectangle(cornerRadius: 1.5).fill(c).frame(width: 3, height: 26)
+                }
                 DialectIcon(dialect: session.config.dialect)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(session.config.displayName).lineLimit(1)
