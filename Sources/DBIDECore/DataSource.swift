@@ -18,6 +18,7 @@ public struct DataSourceConfig: Codable, Sendable, Identifiable, Hashable {
     public var sslMode: SSLMode
     /// Root CA (PEM) used for verify-ca / verify-full; empty = system trust store.
     public var sslRootCert: String
+    public var ssh: SSHConfig
 
     public var tlsOptions: TLSOptions {
         TLSOptions(mode: sslMode, rootCertificatePath: sslRootCert.isEmpty ? nil : sslRootCert)
@@ -26,7 +27,8 @@ public struct DataSourceConfig: Codable, Sendable, Identifiable, Hashable {
     public init(
         id: UUID = UUID(), name: String = "", dialect: SQLDialect = .postgres, host: String = "localhost",
         port: Int? = nil, user: String = "", database: String = "", filePath: String = "",
-        readOnly: Bool = false, color: String? = nil, sslMode: SSLMode = .prefer, sslRootCert: String = ""
+        readOnly: Bool = false, color: String? = nil, sslMode: SSLMode = .prefer, sslRootCert: String = "",
+        ssh: SSHConfig = SSHConfig()
     ) {
         self.id = id
         self.name = name
@@ -40,10 +42,11 @@ public struct DataSourceConfig: Codable, Sendable, Identifiable, Hashable {
         self.color = color
         self.sslMode = sslMode
         self.sslRootCert = sslRootCert
+        self.ssh = ssh
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, dialect, host, port, user, database, filePath, readOnly, color, sslMode, sslRootCert
+        case id, name, dialect, host, port, user, database, filePath, readOnly, color, sslMode, sslRootCert, ssh
     }
 
     /// Tolerates fields added in later versions being absent from saved state.
@@ -61,6 +64,7 @@ public struct DataSourceConfig: Codable, Sendable, Identifiable, Hashable {
         color = try c.decodeIfPresent(String.self, forKey: .color)
         sslMode = try c.decodeIfPresent(SSLMode.self, forKey: .sslMode) ?? .prefer
         sslRootCert = try c.decodeIfPresent(String.self, forKey: .sslRootCert) ?? ""
+        ssh = try c.decodeIfPresent(SSHConfig.self, forKey: .ssh) ?? SSHConfig()
     }
 
     public var displayName: String {
@@ -75,7 +79,9 @@ public struct DataSourceConfig: Codable, Sendable, Identifiable, Hashable {
     public var subtitle: String {
         switch dialect {
         case .sqlite: return (filePath as NSString).abbreviatingWithTildeInPath
-        default: return "\(dialect.displayName) · \(user)@\(host):\(port)/\(database)"
+        default:
+            let via = ssh.enabled ? " via ssh \(ssh.destination)" : ""
+            return "\(dialect.displayName) · \(user)@\(host):\(port)/\(database)\(via)"
         }
     }
 
@@ -87,15 +93,31 @@ public struct DataSourceConfig: Codable, Sendable, Identifiable, Hashable {
             guard !path.isEmpty else { throw DatabaseError("No database file chosen") }
             return try await SQLiteConnection.open(path: path, readOnly: readOnly)
         case .postgres:
+            let (h, p, tls) = try await endpoint()
             let conn = try await PostgresConnection.connect(
-                host: host, port: port, user: user, password: password, database: database, tls: tlsOptions)
+                host: h, port: p, user: user, password: password, database: database, tls: tls)
             if readOnly { _ = try await conn.execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY") }
             return conn
         case .mysql:
+            let (h, p, tls) = try await endpoint()
             let conn = try await MySQLConnection.connect(
-                host: host, port: port, user: user, password: password, database: database, tls: tlsOptions)
+                host: h, port: p, user: user, password: password, database: database, tls: tls)
             if readOnly { _ = try await conn.execute("SET SESSION TRANSACTION READ ONLY") }
             return conn
         }
+    }
+
+    /// Where to open the socket: the server itself, or the local end of an SSH tunnel.
+    /// Through a tunnel, TLS still checks the certificate against the real host name.
+    private func endpoint() async throws -> (String, Int, TLSOptions) {
+        guard ssh.enabled else { return (host, port, tlsOptions) }
+        guard !ssh.host.isEmpty else { throw DatabaseError("SSH host is empty") }
+        let ssh = ssh, host = host, port = port
+        let local = try await SerialWorker(label: "dbide.ssh").run {
+            try SSHTunnels.shared.localPort(ssh: ssh, remoteHost: host, remotePort: port)
+        }
+        var tls = tlsOptions
+        tls.serverName = host
+        return ("127.0.0.1", local, tls)
     }
 }

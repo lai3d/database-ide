@@ -10,6 +10,8 @@ struct DataSourceEditor: View {
     @State private var password = ""
     @State private var passwordChanged = false
     @State private var testState: TestState = .idle
+    @State private var url = ""
+    @State private var urlError = false
 
     enum TestState: Equatable {
         case idle, testing, ok(String), failed(String)
@@ -22,6 +24,16 @@ struct DataSourceEditor: View {
                 .padding([.horizontal, .top])
                 .padding(.bottom, 8)
             Form {
+                if isNew {
+                    HStack {
+                        TextField("URL", text: $url, prompt: Text("postgres://user:pass@host:5432/db, jdbc:mysql://…, ~/app.db"))
+                            .onSubmit(applyURL)
+                        Button("Apply", action: applyURL).disabled(url.isEmpty)
+                    }
+                    if urlError {
+                        Text("Unrecognized connection string").font(.caption).foregroundStyle(.red)
+                    }
+                }
                 Picker("Driver", selection: $config.dialect) {
                     ForEach(SQLDialect.allCases, id: \.self) { Text($0.displayName).tag($0) }
                 }
@@ -48,6 +60,23 @@ struct DataSourceEditor: View {
                     TextField("Database", text: $config.database, prompt: Text(config.dialect == .mysql ? "optional" : config.user))
                 }
                 if config.dialect != .sqlite {
+                    Section("SSH Tunnel") {
+                        Toggle("Connect through SSH", isOn: $config.ssh.enabled)
+                        if config.ssh.enabled {
+                            HStack {
+                                TextField("SSH host", text: $config.ssh.host, prompt: Text("bastion.example.com"))
+                                TextField("Port", value: $config.ssh.port, format: .number.grouping(.never))
+                                    .frame(width: 110)
+                            }
+                            TextField("SSH user", text: $config.ssh.user, prompt: Text(NSUserName()))
+                            HStack {
+                                TextField("Private key", text: $config.ssh.keyPath, prompt: Text("SSH agent / ~/.ssh defaults"))
+                                Button("Choose…") { chooseKey() }
+                            }
+                            Text("Host and port above are resolved from the SSH server. Keys with a passphrase must be added to the SSH agent (ssh-add).")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
                     Section("SSL / TLS") {
                         Picker("Mode", selection: $config.sslMode) {
                             ForEach(SSLMode.allCases, id: \.self) { Text($0.title).tag($0) }
@@ -100,6 +129,33 @@ struct DataSourceEditor: View {
         case .verifyCA: "Always encrypt; certificate must chain to a trusted root."
         case .verifyFull: "Always encrypt; certificate must be trusted and match the host name."
         }
+    }
+
+    private func applyURL() {
+        guard let parsed = ConnectionURL.parse(url) else {
+            urlError = true
+            return
+        }
+        urlError = false
+        var c = parsed.config
+        c.id = config.id
+        c.name = config.name.isEmpty ? c.name : config.name
+        config = c
+        if let pw = parsed.password {
+            password = pw
+            passwordChanged = true
+        }
+        testState = .idle
+    }
+
+    private func chooseKey() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.showsHiddenFiles = true
+        panel.directoryURL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".ssh")
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        config.ssh.keyPath = (url.path as NSString).abbreviatingWithTildeInPath
     }
 
     private func chooseRootCert() {

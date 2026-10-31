@@ -13,7 +13,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    func applicationWillTerminate(_ notification: Notification) { model?.saveNow() }
+    func applicationWillTerminate(_ notification: Notification) {
+        model?.saveNow()
+        SSHTunnels.shared.closeAll()
+    }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 }
 

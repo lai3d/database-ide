@@ -281,3 +281,48 @@ struct MySQLTLSTests {
         await c.close()
     }
 }
+
+/// DBIDE_SSH=host:port:user:keyPath:knownHostsFile — tunnels to dbide-pg:5432 (container name on the SSH host's network).
+@Suite(.enabled(if: ProcessInfo.processInfo.environment["DBIDE_SSH"] != nil && ServerEnv.from("DBIDE_PG") != nil), .serialized)
+struct SSHTunnelTests {
+    let pg = ServerEnv.from("DBIDE_PG")!
+
+    func config(mode: SSLMode = .require, key: String? = nil) -> DataSourceConfig {
+        let p = ProcessInfo.processInfo.environment["DBIDE_SSH"]!.split(separator: ":").map(String.init)
+        SSHTunnels.shared.extraOptions = ["UserKnownHostsFile=\(p[4])"]
+        return DataSourceConfig(
+            dialect: .postgres, host: "dbide-pg", port: 5432, user: pg.user, database: pg.database,
+            sslMode: mode, ssh: SSHConfig(enabled: true, host: p[0], port: Int(p[1])!, user: p[2], keyPath: key ?? p[3]))
+    }
+
+    @Test func connectThroughTunnel() async throws {
+        let c = try await config().connect(password: pg.password)
+        #expect(c.securityDescription != nil)  // TLS inside the tunnel
+        #expect(try await c.strings("SELECT current_database()") == [pg.database])
+        // A second connection reuses the same tunnel.
+        let c2 = try await config().connect(password: pg.password)
+        #expect(try await c2.strings("SELECT 1") == ["1"])
+        await c.close()
+        await c2.close()
+    }
+
+    @Test func tlsVerifiesRealHostName() async throws {
+        // The certificate is for "localhost", not "dbide-pg", so verify-full must fail even though
+        // the socket goes to 127.0.0.1.
+        var cfg = config(mode: .verifyFull)
+        cfg.sslRootCert = ProcessInfo.processInfo.environment["DBIDE_PG_CA"] ?? ""
+        await #expect(throws: DatabaseError.self) { _ = try await cfg.connect(password: pg.password) }
+        cfg.sslMode = .verifyCA
+        let c = try await cfg.connect(password: pg.password)
+        await c.close()
+    }
+
+    @Test func badKeyReportsSSHError() async throws {
+        do {
+            _ = try await config(key: "/nonexistent/key").connect(password: pg.password)
+            Issue.record("expected failure")
+        } catch let e as DatabaseError {
+            #expect(e.message.contains("SSH tunnel"))
+        }
+    }
+}

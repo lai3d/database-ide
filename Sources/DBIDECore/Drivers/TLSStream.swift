@@ -39,10 +39,13 @@ public struct TLSOptions: Sendable, Hashable {
     public var mode: SSLMode
     /// PEM file with one or more root certificates; when set, only these are trusted.
     public var rootCertificatePath: String?
+    /// Host name to send (SNI) and verify; defaults to the host connected to (differs behind an SSH tunnel).
+    public var serverName: String?
 
-    public init(mode: SSLMode = .prefer, rootCertificatePath: String? = nil) {
+    public init(mode: SSLMode = .prefer, rootCertificatePath: String? = nil, serverName: String? = nil) {
         self.mode = mode
         self.rootCertificatePath = rootCertificatePath
+        self.serverName = serverName
     }
 
     public static let disabled = TLSOptions(mode: .disable)
@@ -58,8 +61,9 @@ final class TLSStream: ByteStream, @unchecked Sendable {
     private var plainIndex = 0
     private(set) var negotiatedDescription = ""
 
-    init(socket: TCPSocket, host: String, options: TLSOptions) throws {
+    init(socket: TCPSocket, host connectHost: String, options: TLSOptions) throws {
         self.socket = socket
+        let host = options.serverName ?? connectHost
         guard let ctx = SSLCreateContext(nil, .clientSide, .streamType) else {
             throw DatabaseError("Cannot create TLS context")
         }
