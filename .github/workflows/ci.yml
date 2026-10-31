@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Select newest Xcode
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          echo "Using $XCODE"
+          sudo xcode-select -s "$XCODE"
+          swift --version
+      - name: Build
+        run: swift build
+      # PostgreSQL / MySQL / SSH tests need docker (not available on macOS runners) and skip themselves.
+      - name: Test
+        run: swift test
+      - name: Bundle app
+        run: ./scripts/bundle.sh
+      - name: Zip app
+        run: ditto -c -k --keepParent build/DBIDE.app build/DBIDE.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DBIDE-app
+          path: build/DBIDE.zip

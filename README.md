@@ -1,5 +1,7 @@
 # DBIDE
 
+[![CI](https://github.com/lai3d/database-ide/actions/workflows/ci.yml/badge.svg)](https://github.com/lai3d/database-ide/actions/workflows/ci.yml)
+
 A native macOS database IDE in the spirit of JetBrains DataGrip, written in Swift (SwiftUI + AppKit) with no third-party dependencies.
 
 > Early but usable: connects, browses, queries and edits data on real servers.
@@ -37,8 +39,12 @@ A native macOS database IDE in the spirit of JetBrains DataGrip, written in Swif
 swift run DBIDE
 swift test                    # unit tests + SQLite
 ./scripts/test-servers.sh     # also runs PostgreSQL/MySQL driver tests against docker containers
-./scripts/bundle.sh           # build build/DBIDE.app
+./scripts/bundle.sh           # build build/DBIDE.app (with icon; VERSION=1.2.3 to override)
+swift scripts/make-icon.swift # regenerate Resources/AppIcon.icns
 ```
+
+Pushing a `v*` tag builds the app on GitHub Actions and attaches a zip to a GitHub release
+(ad-hoc signed, not notarized — right-click → Open the first time).
 
 ## Limitations
 
