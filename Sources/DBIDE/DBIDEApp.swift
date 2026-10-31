@@ -60,6 +60,13 @@ struct DBIDEApp: App {
                     .keyboardShortcut(".")
                     .disabled(console?.isRunning != true)
                 Divider()
+                Button("Explain Plan") { console?.explain(analyze: false) }
+                    .keyboardShortcut("e", modifiers: [.command, .option])
+                    .disabled(console == nil)
+                Button("Explain Analyze") { console?.explain(analyze: true) }
+                    .keyboardShortcut("e", modifiers: [.command, .option, .shift])
+                    .disabled(console == nil)
+                Divider()
                 Button("Commit") { Task { await console?.endTransaction(commit: true) } }
                     .keyboardShortcut("k", modifiers: [.command, .shift])
                     .disabled(console?.inTransaction != true)

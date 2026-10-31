@@ -1,0 +1,194 @@
+import Foundation
+
+/// One operator of a query plan, normalized across dialects.
+public struct PlanNode: Sendable, Identifiable, Hashable {
+    public var id = UUID()
+    public var title: String
+    public var details: [String] = []
+    public var totalCost: Double?
+    public var planRows: Double?
+    /// Milliseconds per loop (EXPLAIN ANALYZE).
+    public var actualTime: Double?
+    public var actualRows: Double?
+    public var loops: Double?
+    public var children: [PlanNode] = []
+
+    public init(title: String, details: [String] = [], totalCost: Double? = nil, planRows: Double? = nil,
+                actualTime: Double? = nil, actualRows: Double? = nil, loops: Double? = nil, children: [PlanNode] = []) {
+        self.title = title
+        self.details = details
+        self.totalCost = totalCost
+        self.planRows = planRows
+        self.actualTime = actualTime
+        self.actualRows = actualRows
+        self.loops = loops
+        self.children = children
+    }
+
+    /// Children as optional for SwiftUI `OutlineGroup`.
+    public var childNodes: [PlanNode]? { children.isEmpty ? nil : children }
+
+    /// Total time spent in this node across loops (ms).
+    public var inclusiveTime: Double? { actualTime.map { $0 * (loops ?? 1) } }
+
+    /// Time spent in this node minus its children (ms).
+    public var exclusiveTime: Double? {
+        guard let t = inclusiveTime else { return nil }
+        return max(0, t - children.compactMap(\.inclusiveTime).reduce(0, +))
+    }
+
+    public var allNodes: [PlanNode] { [self] + children.flatMap(\.allNodes) }
+}
+
+public struct ExplainResult: Sendable {
+    public var root: PlanNode
+    public var analyzed: Bool
+    public var planningTime: Double?
+    public var executionTime: Double?
+    /// Raw plan text / JSON as returned by the server.
+    public var raw: String
+}
+
+public enum Explainer {
+    /// Explains `sql`. With `analyze` the statement really runs; anything other than a
+    /// plain query runs inside a transaction that is rolled back.
+    public static func explain(_ sql: String, analyze: Bool, on c: any DatabaseConnection) async throws -> ExplainResult {
+        let sql = sql.trimmingCharacters(in: CharacterSet(charactersIn: "; \n\t"))
+        let readOnly = ["SELECT", "WITH", "VALUES", "TABLE"].contains(SQLLexer.leadingKeywords(sql, count: 1).uppercased())
+        let wrap = analyze && !readOnly && c.dialect != .sqlite && !c.inTransaction
+        if wrap { _ = try await c.execute(c.dialect == .mysql ? "START TRANSACTION" : "BEGIN") }
+        do {
+            let result: ExplainResult
+            switch c.dialect {
+            case .postgres:
+                let opts = analyze ? "FORMAT JSON, ANALYZE, BUFFERS" : "FORMAT JSON"
+                let json = try await c.strings("EXPLAIN (\(opts)) \(sql)").joined()
+                result = try parsePostgres(json, analyzed: analyze)
+            case .mysql:
+                let text = try await c.strings((analyze ? "EXPLAIN ANALYZE " : "EXPLAIN FORMAT=TREE ") + sql).joined(separator: "\n")
+                result = parseMySQLTree(text, analyzed: analyze)
+            case .sqlite:
+                let rows = try await c.execute("EXPLAIN QUERY PLAN " + sql).rows
+                result = parseSQLite(rows.map { (Int($0[0].displayString) ?? 0, Int($0[1].displayString) ?? 0, $0[3].displayString) })
+            }
+            if wrap { _ = try await c.execute("ROLLBACK") }
+            return result
+        } catch {
+            if wrap { _ = try? await c.execute("ROLLBACK") }
+            throw error
+        }
+    }
+
+    // MARK: PostgreSQL JSON
+
+    static func parsePostgres(_ json: String, analyzed: Bool) throws -> ExplainResult {
+        guard let data = json.data(using: .utf8),
+            let top = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]],
+            let first = top.first, let plan = first["Plan"] as? [String: Any]
+        else { throw DatabaseError("Unexpected EXPLAIN output") }
+        return ExplainResult(
+            root: postgresNode(plan), analyzed: analyzed,
+            planningTime: first["Planning Time"] as? Double, executionTime: first["Execution Time"] as? Double,
+            raw: json)
+    }
+
+    private static func postgresNode(_ p: [String: Any]) -> PlanNode {
+        func s(_ k: String) -> String? { p[k] as? String }
+        func d(_ k: String) -> Double? { (p[k] as? NSNumber)?.doubleValue }
+        var title = s("Node Type") ?? "?"
+        if let join = s("Join Type"), title.contains("Join") || title == "Nested Loop" { title = "\(join) \(title)" }
+        if let strategy = s("Strategy"), title == "Aggregate" { title = "\(strategy) \(title)" }
+        if let rel = s("Relation Name") {
+            title += " on \(rel)"
+            if let alias = s("Alias"), alias != rel { title += " \(alias)" }
+        } else if let cte = s("CTE Name") {
+            title += " on \(cte)"
+        } else if let fn = s("Function Name") {
+            title += " on \(fn)()"
+        }
+        if let idx = s("Index Name") { title += " using \(idx)" }
+        var details: [String] = []
+        for key in ["Index Cond", "Recheck Cond", "Hash Cond", "Merge Cond", "Join Filter", "Filter", "Sort Key", "Group Key", "Output"] {
+            if let v = p[key] as? String { details.append("\(key): \(v)") }
+            if let v = p[key] as? [String] { details.append("\(key): \(v.joined(separator: ", "))") }
+        }
+        if let removed = d("Rows Removed by Filter"), removed > 0 { details.append("Rows Removed by Filter: \(Int(removed))") }
+        if let hit = d("Shared Hit Blocks"), let read = d("Shared Read Blocks"), hit + read > 0 {
+            details.append("Buffers: shared hit=\(Int(hit)) read=\(Int(read))")
+        }
+        let children = (p["Plans"] as? [[String: Any]] ?? []).map(postgresNode)
+        return PlanNode(
+            title: title, details: details, totalCost: d("Total Cost"), planRows: d("Plan Rows"),
+            actualTime: d("Actual Total Time"), actualRows: d("Actual Rows"), loops: d("Actual Loops"), children: children)
+    }
+
+    // MARK: MySQL TREE
+
+    static func parseMySQLTree(_ text: String, analyzed: Bool) -> ExplainResult {
+        var stack: [(indent: Int, node: PlanNode)] = []
+        var roots: [PlanNode] = []
+
+        func attach(_ node: PlanNode) {
+            if stack.isEmpty {
+                roots.append(node)
+            } else {
+                stack[stack.count - 1].node.children.append(node)
+            }
+        }
+        func popTo(_ indent: Int) {
+            while let last = stack.last, last.indent >= indent {
+                stack.removeLast()
+                attach(last.node)
+            }
+        }
+        for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
+            guard let arrow = line.range(of: "-> ") else {
+                // Continuation lines belong to the current node.
+                if !stack.isEmpty { stack[stack.count - 1].node.details.append(line.trimmingCharacters(in: .whitespaces)) }
+                continue
+            }
+            let indent = line.distance(from: line.startIndex, to: arrow.lowerBound)
+            let body = String(line[arrow.upperBound...])
+            popTo(indent)
+            stack.append((indent, mysqlNode(body)))
+        }
+        popTo(0)
+        let root = roots.count == 1 ? roots[0] : PlanNode(title: "Plan", children: roots)
+        return ExplainResult(
+            root: root, analyzed: analyzed, planningTime: nil,
+            executionTime: analyzed ? root.inclusiveTime : nil, raw: text)
+    }
+
+    private static func mysqlNode(_ body: String) -> PlanNode {
+        var title = body
+        if let r = body.range(of: "  (") ?? body.range(of: " (cost=") ?? body.range(of: " (actual") {
+            title = String(body[..<r.lowerBound])
+        }
+        func number(_ pattern: String) -> Double? {
+            guard let r = body.range(of: pattern, options: .regularExpression) else { return nil }
+            let m = String(body[r])
+            return Double(m.split(separator: "=").last.map { String($0).trimmingCharacters(in: CharacterSet(charactersIn: " )")) } ?? "")
+        }
+        var node = PlanNode(title: title, totalCost: number(#"cost=[0-9.e+]+"#), planRows: number(#"\(cost=[0-9.e+]+ rows=[0-9.e+]+"#))
+        if let r = body.range(of: #"actual time=[0-9.]+\.\.[0-9.]+ rows=[0-9.e+]+ loops=[0-9]+"#, options: .regularExpression) {
+            let parts = body[r].split(separator: " ")
+            node.actualTime = parts[1].split(separator: "=").last.flatMap { $0.components(separatedBy: "..").last }.flatMap(Double.init)
+            node.actualRows = parts[2].split(separator: "=").last.flatMap { Double($0) }
+            node.loops = parts[3].split(separator: "=").last.flatMap { Double($0) }
+        }
+        return node
+    }
+
+    // MARK: SQLite
+
+    static func parseSQLite(_ rows: [(id: Int, parent: Int, detail: String)]) -> ExplainResult {
+        func children(of parent: Int) -> [PlanNode] {
+            rows.filter { $0.parent == parent }.map { PlanNode(title: $0.detail, children: children(of: $0.id)) }
+        }
+        let top = children(of: 0)
+        let root = top.count == 1 ? top[0] : PlanNode(title: "QUERY PLAN", children: top)
+        return ExplainResult(
+            root: root, analyzed: false, planningTime: nil, executionTime: nil,
+            raw: rows.map { "\($0.id)|\($0.parent)|\($0.detail)" }.joined(separator: "\n"))
+    }
+}

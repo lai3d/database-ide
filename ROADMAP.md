@@ -47,7 +47,7 @@ Estimates are Claude Code session time.
 | 3.1 | ✅ Completion popup | Pops up while typing / after `.` / ⌃Space; icons for table, view, column, schema, alias, keyword; context-aware (tables after FROM/JOIN, columns in SELECT/WHERE), alias and `schema.` resolution, quotes names when needed, loads metadata lazily and refreshes. Engine in Core (`SQLCompletion`) with tests | 0.6h |
 | 3.2 | ✅ SQL formatter | ⌥⌘L reformats the selection or the console: clause per line, aligned select list, AND/OR breaks (BETWEEN-aware), indented subqueries, upper-case keywords; only whitespace/keyword case change (tested for idempotence and token preservation) | 0.4h |
 | 3.3 | ⬜ Bind parameters | Prompt for `?` / `:name` / `$1` values before running | 0.4h |
-| 3.4 | ⬜ Explain plan | `EXPLAIN (ANALYZE)` rendered as a tree with costs | 0.6h |
+| 3.4 | ✅ Explain plan | ⌥⌘E / ⇧⌥⌘E (analyze) on the statement at the caret: PG JSON, MySQL TREE / EXPLAIN ANALYZE, SQLite QUERY PLAN → one tree with cost, estimated vs actual rows (misestimates flagged), self-time bars, raw view; ANALYZE of DML is rolled back | 0.5h |
 | 3.5 | ✅ Transaction mode | Auto / Manual per console, Commit (⇧⌘K) / Rollback, "Transaction open" indicator driven by the server's own status (PG ReadyForQuery, MySQL status flags, SQLite autocommit) so a typed BEGIN is tracked too; prompt when closing a console with an open transaction | 0.4h |
 | 3.6 | ⬜ Pinned results & paging in console | Keep result tabs across runs; fetch next page instead of a hard row limit | 0.5h |
 | 3.7 | ⬜ SQL files | Open / save `.sql` files; run a file against a data source | 0.4h |

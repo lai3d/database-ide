@@ -16,6 +16,8 @@ struct ResultTab: Identifiable {
     let id = UUID()
     var title: String
     var result: QueryResult
+    /// Set for EXPLAIN tabs.
+    var plan: ExplainResult? = nil
 }
 
 /// Where in the editor the user asked to run.
@@ -197,6 +199,33 @@ final class ConsoleModel: Identifiable {
     private func isTransactionControl(_ sql: String) -> Bool {
         let kw = SQLLexer.leadingKeywords(sql, count: 1).uppercased()
         return ["BEGIN", "START", "COMMIT", "ROLLBACK", "END", "SAVEPOINT", "RELEASE", "SET", "SHOW", "USE"].contains(kw)
+    }
+
+    /// Shows the plan of the statement at the caret (ANALYZE really runs it; DML is rolled back).
+    func explain(analyze: Bool) {
+        guard !isRunning, let st = statementsToRun(.caretOrSelection).first else { return }
+        Task {
+            isRunning = true
+            executingRange = st.range
+            defer {
+                isRunning = false
+                executingRange = nil
+            }
+            do {
+                let conn = try await ensureConnection()
+                log.append(LogEntry(kind: .statement, text: (analyze ? "EXPLAIN ANALYZE " : "EXPLAIN ") + st.text))
+                let plan = try await Explainer.explain(st.text, analyze: analyze, on: conn)
+                inTransaction = conn.inTransaction
+                let tab = ResultTab(title: analyze ? "Plan (analyzed)" : "Plan", result: QueryResult(statement: st.text), plan: plan)
+                results.removeAll { $0.plan != nil }
+                results.insert(tab, at: 0)
+                selectedResultID = tab.id
+                log.append(LogEntry(kind: .info, text: "Plan with \(plan.root.allNodes.count) nodes" + (plan.executionTime.map { String(format: ", executed in %.1f ms", $0) } ?? "")))
+            } catch {
+                log.append(LogEntry(kind: .error, text: error.localizedDescription))
+                errorRange = st.range
+            }
+        }
     }
 
     /// COMMIT or ROLLBACK the open transaction.

@@ -137,7 +137,7 @@ private struct ResultsPanel: View {
                     ) { console.selectedResultID = r.id }
                 }
                 Spacer()
-                if let r = console.results.first(where: { $0.id == console.selectedResultID }) {
+                if let r = console.results.first(where: { $0.id == console.selectedResultID }), r.plan == nil {
                     Text(r.result.summary).font(.caption).foregroundStyle(.secondary)
                     ExportMenu(result: r.result, dialect: console.dialect, name: r.title)
                         .padding(.horizontal, 8)
@@ -146,7 +146,9 @@ private struct ResultsPanel: View {
             .frame(height: 26)
             .background(.bar)
             Divider()
-            if let r = console.results.first(where: { $0.id == console.selectedResultID }) {
+            if let r = console.results.first(where: { $0.id == console.selectedResultID }), let plan = r.plan {
+                PlanView(plan: plan).id(r.id)
+            } else if let r = console.results.first(where: { $0.id == console.selectedResultID }) {
                 ResultGridView(source: .readOnly(r.result, dialect: console.dialect, version: r.id.hashValue))
                     .id(r.id)
                 if r.result.truncated {
