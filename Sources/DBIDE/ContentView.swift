@@ -24,6 +24,7 @@ struct ContentView: View {
         .sheet(item: $app.editingDataSource) { config in
             DataSourceEditor(config: config, isNew: app.editingIsNew)
         }
+        .sheet(isPresented: $app.showGoTo) { GoToTableView() }
         .inspector(isPresented: $app.showHistory) {
             HistoryView().inspectorColumnWidth(min: 240, ideal: 320, max: 500)
         }

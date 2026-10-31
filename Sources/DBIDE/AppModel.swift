@@ -43,6 +43,7 @@ final class AppModel {
     var editingDataSource: DataSourceConfig?
     var editingIsNew = false
     var showHistory = false
+    var showGoTo = false
 
     private let store = Store()
     private var saveTask: Task<Void, Never>?

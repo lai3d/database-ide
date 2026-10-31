@@ -44,6 +44,8 @@ struct DBIDEApp: App {
                 }
                 .keyboardShortcut("l", modifiers: [.command, .shift])
                 .disabled(model.dataSources.isEmpty)
+                Button("Go to Table…") { model.showGoTo = true }
+                .keyboardShortcut("o")
                 Divider()
                 Button("Close Tab") { model.closeSelectedTab() }
                     .keyboardShortcut("w")
