@@ -50,7 +50,7 @@ Estimates are Claude Code session time.
 | 3.4 | ✅ Explain plan | ⌥⌘E / ⇧⌥⌘E (analyze) on the statement at the caret: PG JSON, MySQL TREE / EXPLAIN ANALYZE, SQLite QUERY PLAN → one tree with cost, estimated vs actual rows (misestimates flagged), self-time bars, raw view; ANALYZE of DML is rolled back | 0.5h |
 | 3.5 | ✅ Transaction mode | Auto / Manual per console, Commit (⇧⌘K) / Rollback, "Transaction open" indicator driven by the server's own status (PG ReadyForQuery, MySQL status flags, SQLite autocommit) so a typed BEGIN is tracked too; prompt when closing a console with an open transaction | 0.4h |
 | 3.6 | ⬜ Pinned results & paging in console | Keep result tabs across runs; fetch next page instead of a hard row limit | 0.5h |
-| 3.7 | ⬜ SQL files | Open / save `.sql` files; run a file against a data source | 0.4h |
+| 3.7 | ✅ SQL files | ⇧⌘O opens `.sql` files as consoles on the active data source; ⌘S / ⇧⌘S save; dirty marker and save prompt on close; file link persists across launches | 0.3h |
 
 ## Phase 4 — Schema tools
 

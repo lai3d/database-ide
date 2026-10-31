@@ -76,6 +76,9 @@ private struct TabButton: View {
             }
             Image(systemName: tab.icon).font(.caption).foregroundStyle(.secondary)
             Text(tab.title).lineLimit(1).font(.callout)
+            if case .console(let c) = tab, c.isDirty {
+                Circle().fill(.secondary).frame(width: 6, height: 6).help("Unsaved changes")
+            }
             if case .console(let c) = tab, c.isRunning {
                 ProgressView().controlSize(.mini)
             }

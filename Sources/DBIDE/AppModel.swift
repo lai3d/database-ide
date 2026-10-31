@@ -56,6 +56,10 @@ final class AppModel {
         for c in state.consoles where session(for: c.dataSourceID) != nil {
             let m = ConsoleModel(id: c.id, title: c.title, dataSourceID: c.dataSourceID, text: c.text, schema: c.schema)
             m.app = self
+            if let path = c.filePath {
+                m.fileURL = URL(fileURLWithPath: path)
+                m.savedText = c.savedText ?? c.text
+            }
             tabs.append(.console(m))
         }
         selectedTabID = state.selectedConsole.flatMap { id in tabs.first { $0.id == id }?.id } ?? tabs.first?.id
@@ -188,6 +192,21 @@ final class AppModel {
 
     func close(_ id: UUID) {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        if case .console(let c) = tabs[index], c.isDirty {
+            let alert = NSAlert()
+            alert.messageText = "Save changes to “\(c.title)”?"
+            alert.addButton(withTitle: "Save")
+            alert.addButton(withTitle: "Don’t Save")
+            alert.addButton(withTitle: "Cancel")
+            switch alert.runModal() {
+            case .alertFirstButtonReturn:
+                selectedTabID = c.id
+                saveConsole()
+                if c.isDirty { return }
+            case .alertSecondButtonReturn: break
+            default: return
+            }
+        }
         if case .console(let c) = tabs[index], c.inTransaction {
             let alert = NSAlert()
             alert.messageText = "“\(c.title)” has an uncommitted transaction"
@@ -224,6 +243,58 @@ final class AppModel {
         scheduleSave()
     }
 
+    // MARK: SQL files
+
+    func openSQLFile() {
+        guard let session = activeDataSource ?? dataSources.first else {
+            let a = NSAlert()
+            a.messageText = "Add a data source first"
+            a.informativeText = "A SQL file opens as a console attached to a data source."
+            a.runModal()
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.allowedContentTypes = [.init(filenameExtension: "sql")!, .plainText]
+        panel.message = "Opens in a console for \(session.config.displayName)"
+        guard panel.runModal() == .OK else { return }
+        for url in panel.urls {
+            if let tab = tabs.first(where: { if case .console(let c) = $0 { c.fileURL == url } else { false } }) {
+                selectedTabID = tab.id
+                continue
+            }
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            let c = newConsole(for: session, text: text)
+            c.title = url.lastPathComponent
+            c.fileURL = url
+            c.savedText = text
+        }
+        scheduleSave()
+    }
+
+    /// Saves the active console to its file (asking for one if it has none).
+    func saveConsole(as askForLocation: Bool = false) {
+        guard case .console(let c) = selectedTab else { return }
+        var url = c.fileURL
+        if askForLocation || url == nil {
+            let panel = NSSavePanel()
+            panel.allowedContentTypes = [.init(filenameExtension: "sql")!]
+            panel.nameFieldStringValue = c.fileURL?.lastPathComponent ?? (c.title.replacingOccurrences(of: "/", with: "-") + ".sql")
+            guard panel.runModal() == .OK, let chosen = panel.url else { return }
+            url = chosen
+        }
+        guard let url else { return }
+        do {
+            try c.text.write(to: url, atomically: true, encoding: .utf8)
+            c.fileURL = url
+            c.savedText = c.text
+            c.title = url.lastPathComponent
+            scheduleSave()
+        } catch {
+            NSAlert(error: error).runModal()
+        }
+    }
+
     func closeSelectedTab() {
         if let id = selectedTabID { close(id) }
     }
@@ -242,7 +313,9 @@ final class AppModel {
     func saveNow() {
         let consoles: [Store.ConsoleState] = tabs.compactMap {
             guard case .console(let c) = $0 else { return nil }
-            return Store.ConsoleState(id: c.id, title: c.title, dataSourceID: c.dataSourceID, text: c.text, schema: c.currentSchema)
+            return Store.ConsoleState(
+                id: c.id, title: c.title, dataSourceID: c.dataSourceID, text: c.text, schema: c.currentSchema,
+                filePath: c.fileURL?.path, savedText: c.fileURL == nil ? nil : c.savedText)
         }
         store.save(
             Store.State(
@@ -259,6 +332,8 @@ struct Store {
         var dataSourceID: UUID
         var text: String
         var schema: String?
+        var filePath: String?
+        var savedText: String?
     }
 
     struct State: Codable {

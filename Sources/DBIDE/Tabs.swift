@@ -47,6 +47,12 @@ final class ConsoleModel: Identifiable {
     /// Range of the statement currently executing, highlighted in the editor.
     var executingRange: NSRange?
     var maxRows = 500
+    /// Backing .sql file, when the console was opened from / saved to disk.
+    var fileURL: URL?
+    /// Text as last read from / written to `fileURL`.
+    var savedText: String?
+    var isDirty: Bool { fileURL != nil && text != savedText }
+
     /// Manual mode opens a transaction before the first statement; Commit / Rollback end it.
     var autoCommit = true
     /// Mirrors the server's view after each statement (also catches a typed BEGIN).

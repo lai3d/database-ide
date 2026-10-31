@@ -45,11 +45,21 @@ struct DBIDEApp: App {
                 .keyboardShortcut("l", modifiers: [.command, .shift])
                 .disabled(model.dataSources.isEmpty)
                 Button("Go to Table…") { model.showGoTo = true }
-                .keyboardShortcut("o")
+                    .keyboardShortcut("o")
+                Button("Open SQL File…") { model.openSQLFile() }
+                    .keyboardShortcut("o", modifiers: [.command, .shift])
                 Divider()
                 Button("Close Tab") { model.closeSelectedTab() }
                     .keyboardShortcut("w")
                     .disabled(model.selectedTab == nil)
+            }
+            CommandGroup(replacing: .saveItem) {
+                Button("Save") { model.saveConsole() }
+                    .keyboardShortcut("s")
+                    .disabled(console == nil)
+                Button("Save As…") { model.saveConsole(as: true) }
+                    .keyboardShortcut("s", modifiers: [.command, .shift])
+                    .disabled(console == nil)
             }
             CommandMenu("Query") {
                 Button("Execute") { console?.run(.caretOrSelection) }
