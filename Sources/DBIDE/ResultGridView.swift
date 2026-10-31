@@ -1,0 +1,359 @@
+import AppKit
+import DBIDECore
+import SwiftUI
+
+enum GridRowState { case normal, edited, deleted, inserted }
+
+/// What the grid shows. `version` must change whenever the content does.
+struct GridSource {
+    var columns: [ResultColumn]
+    var rowCount: Int
+    var version: Int
+    var dialect: SQLDialect
+    var tableName: String = "my_table"
+    var value: (Int, Int) -> SQLValue
+    var rowState: ((Int) -> GridRowState)? = nil
+    var isCellEdited: ((Int, Int) -> Bool)? = nil
+    /// Non-nil makes cells editable.
+    var onEdit: ((Int, Int, SQLValue) -> Void)? = nil
+    var onDeleteRows: ((IndexSet) -> Void)? = nil
+
+    static func readOnly(_ result: QueryResult, dialect: SQLDialect, version: Int) -> GridSource {
+        GridSource(
+            columns: result.columns, rowCount: result.rows.count, version: version, dialect: dialect,
+            value: { r, c in c < result.rows[r].count ? result.rows[r][c] : .null })
+    }
+}
+
+struct ResultGridView: NSViewRepresentable {
+    var source: GridSource
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let table = GridTableView()
+        table.coordinator = context.coordinator
+        table.usesAlternatingRowBackgroundColors = true
+        table.allowsMultipleSelection = true
+        table.allowsColumnReordering = true
+        table.allowsColumnResizing = true
+        table.columnAutoresizingStyle = .noColumnAutoresizing
+        table.gridStyleMask = [.solidVerticalGridLineMask]
+        table.gridColor = .separatorColor.withAlphaComponent(0.4)
+        table.intercellSpacing = NSSize(width: 0, height: 0)
+        table.rowHeight = 20
+        table.style = .plain
+        table.dataSource = context.coordinator
+        table.delegate = context.coordinator
+        table.target = context.coordinator
+        table.doubleAction = #selector(Coordinator.doubleClick(_:))
+        table.menu = context.coordinator.makeMenu()
+        table.menu?.delegate = context.coordinator
+
+        let scroll = NSScrollView()
+        scroll.documentView = table
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = true
+        scroll.autohidesScrollers = true
+        context.coordinator.table = table
+        context.coordinator.apply(source, force: true)
+        return scroll
+    }
+
+    func updateNSView(_ nsView: NSScrollView, context: Context) {
+        context.coordinator.apply(source, force: false)
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate, NSTextFieldDelegate {
+        weak var table: GridTableView?
+        var source: GridSource?
+        private var columnSignature: [ResultColumn] = []
+        /// Display order → model row.
+        private var order: [Int] = []
+        private var popover: NSPopover?
+
+        func apply(_ new: GridSource, force: Bool) {
+            guard let table else { return }
+            let old = source
+            source = new
+            if force || new.columns != columnSignature {
+                columnSignature = new.columns
+                rebuildColumns(table, new)
+            }
+            if force || old?.version != new.version || old?.rowCount != new.rowCount {
+                resort()
+                table.reloadData()
+            }
+        }
+
+        private func rebuildColumns(_ table: NSTableView, _ s: GridSource) {
+            for c in table.tableColumns { table.removeTableColumn(c) }
+            let rowCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("#"))
+            rowCol.title = ""
+            rowCol.width = max(36, CGFloat(String(s.rowCount).count) * 8 + 14)
+            rowCol.isEditable = false
+            table.addTableColumn(rowCol)
+            for (i, col) in s.columns.enumerated() {
+                let c = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(String(i)))
+                c.title = col.name
+                c.headerToolTip = "\(col.name): \(col.typeName)"
+                c.sortDescriptorPrototype = NSSortDescriptor(key: String(i), ascending: true)
+                c.minWidth = 40
+                c.width = estimateWidth(column: i, source: s)
+                table.addTableColumn(c)
+            }
+            table.sortDescriptors = []
+        }
+
+        private func estimateWidth(column: Int, source s: GridSource) -> CGFloat {
+            var chars = s.columns[column].name.count + 2
+            for r in 0..<min(s.rowCount, 60) {
+                chars = max(chars, min(60, s.value(r, column).displayString.count))
+            }
+            return min(420, max(60, CGFloat(chars) * 7.4 + 16))
+        }
+
+        private func resort() {
+            guard let s = source else { return }
+            order = Array(0..<s.rowCount)
+            guard let sd = table?.sortDescriptors.first, let key = sd.key, let col = Int(key) else { return }
+            let asc = sd.ascending
+            order.sort { a, b in
+                let va = s.value(a, col), vb = s.value(b, col)
+                return asc ? SQLValue.sortsBefore(va, vb) : SQLValue.sortsBefore(vb, va)
+            }
+        }
+
+        func modelRow(_ displayRow: Int) -> Int { displayRow < order.count ? order[displayRow] : displayRow }
+
+        // MARK: Data source
+
+        func numberOfRows(in tableView: NSTableView) -> Int { source?.rowCount ?? 0 }
+
+        func tableView(_ tableView: NSTableView, sortDescriptorsDidChange oldDescriptors: [NSSortDescriptor]) {
+            resort()
+            tableView.reloadData()
+        }
+
+        func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+            guard let s = source, let tableColumn else { return nil }
+            let id = tableColumn.identifier
+            let cell: NSTextField
+            if let reused = tableView.makeView(withIdentifier: id, owner: nil) as? NSTextField {
+                cell = reused
+            } else {
+                cell = NSTextField(labelWithString: "")
+                cell.identifier = id
+                cell.font = EditorTheme.gridFont
+                cell.lineBreakMode = .byTruncatingTail
+                cell.cell?.usesSingleLineMode = true
+                cell.delegate = self
+            }
+            let m = modelRow(row)
+            let state = s.rowState?(m) ?? .normal
+            if id.rawValue == "#" {
+                cell.stringValue = state == .inserted ? "+" : String(m + 1)
+                cell.textColor = .tertiaryLabelColor
+                cell.alignment = .right
+                cell.isEditable = false
+                cell.attributedStringValue = NSAttributedString(string: cell.stringValue)
+                return cell
+            }
+            guard let col = Int(id.rawValue) else { return nil }
+            let v = s.value(m, col)
+            cell.isEditable = s.onEdit != nil && state != .deleted && !(v.isBlob)
+            cell.alignment = v.isNumeric ? .right : .left
+            let text = v.displayString.replacingOccurrences(of: "\n", with: "⏎")
+            var attrs: [NSAttributedString.Key: Any] = [.font: EditorTheme.gridFont]
+            if v.isNull {
+                attrs[.foregroundColor] = NSColor.tertiaryLabelColor
+                attrs[.font] = NSFontManager.shared.convert(EditorTheme.gridFont, toHaveTrait: .italicFontMask)
+            } else {
+                attrs[.foregroundColor] = v.isNumeric ? NSColor.systemBlue : NSColor.labelColor
+            }
+            if state == .deleted {
+                attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
+                attrs[.foregroundColor] = NSColor.systemRed
+            }
+            cell.attributedStringValue = NSAttributedString(string: text, attributes: attrs)
+            cell.drawsBackground = state == .inserted || (s.isCellEdited?(m, col) ?? false)
+            cell.backgroundColor =
+                state == .inserted ? NSColor.systemGreen.withAlphaComponent(0.15) : NSColor.systemBlue.withAlphaComponent(0.15)
+            cell.toolTip = v.displayString.count > 40 ? String(v.displayString.prefix(2000)) : nil
+            return cell
+        }
+
+        // MARK: Editing
+
+        func controlTextDidEndEditing(_ obj: Notification) {
+            guard let field = obj.object as? NSTextField, let table, let s = source, let onEdit = s.onEdit else { return }
+            let row = table.row(for: field)
+            let colIndex = table.column(for: field)
+            guard row >= 0, colIndex >= 0, let col = Int(table.tableColumns[colIndex].identifier.rawValue) else { return }
+            let m = modelRow(row)
+            let old = s.value(m, col)
+            let text = field.stringValue
+            if text == old.displayString.replacingOccurrences(of: "\n", with: "⏎") { return }
+            let newValue: SQLValue =
+                switch old {
+                case .integer: Int64(text).map(SQLValue.integer) ?? .text(text)
+                case .real: Double(text).map(SQLValue.real) ?? .text(text)
+                default: .text(text)
+                }
+            onEdit(m, col, newValue)
+        }
+
+        @objc func doubleClick(_ sender: NSTableView) {
+            let row = sender.clickedRow, col = sender.clickedColumn
+            guard row >= 0, col > 0, let s = source, let c = Int(sender.tableColumns[col].identifier.rawValue) else { return }
+            if s.onEdit != nil, !(s.value(modelRow(row), c).isBlob) {
+                sender.editColumn(col, row: row, with: nil, select: true)
+            } else {
+                showValue(row: row, column: col)
+            }
+        }
+
+        private func showValue(row: Int, column: Int) {
+            guard let table, let s = source, let c = Int(table.tableColumns[column].identifier.rawValue) else { return }
+            let v = s.value(modelRow(row), c)
+            var text = v.isNull ? "NULL" : v.exportString
+            if case .text(let t) = v, let data = t.data(using: .utf8),
+                let obj = try? JSONSerialization.jsonObject(with: data),
+                let pretty = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]),
+                t.first == "{" || t.first == "["
+            {
+                text = String(decoding: pretty, as: UTF8.self)
+            }
+            let tv = NSTextView(frame: NSRect(x: 0, y: 0, width: 460, height: 260))
+            tv.string = text
+            tv.font = EditorTheme.gridFont
+            tv.isEditable = false
+            let scroll = NSScrollView(frame: tv.frame)
+            scroll.documentView = tv
+            scroll.hasVerticalScroller = true
+            let vc = NSViewController()
+            vc.view = scroll
+            let p = NSPopover()
+            p.contentViewController = vc
+            p.behavior = .transient
+            p.contentSize = tv.frame.size
+            p.show(relativeTo: table.frameOfCell(atColumn: column, row: row), of: table, preferredEdge: .maxY)
+            popover = p
+        }
+
+        // MARK: Copy & menu
+
+        func selectedModelRows() -> [Int] {
+            guard let table else { return [] }
+            var rows = table.selectedRowIndexes
+            if rows.isEmpty, table.clickedRow >= 0 { rows = IndexSet(integer: table.clickedRow) }
+            return rows.map { modelRow($0) }
+        }
+
+        /// Columns in on-screen order (respecting reordering), excluding the row-number column.
+        private func visibleColumns() -> [Int] {
+            table?.tableColumns.compactMap { Int($0.identifier.rawValue) } ?? []
+        }
+
+        func copy(_ format: ResultExport.Format, header: Bool) {
+            guard let s = source else { return }
+            let cols = visibleColumns()
+            let rows = selectedModelRows().map { r in cols.map { s.value(r, $0) } }
+            let text = ResultExport.render(
+                columns: cols.map { s.columns[$0] }, rows: rows, format: format, includeHeader: header,
+                dialect: s.dialect, tableName: s.tableName)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+        }
+
+        @objc func copyTSV(_ sender: Any?) { copy(.tsv, header: false) }
+        @objc func copyWithHeader(_ sender: Any?) { copy(.tsv, header: true) }
+        @objc func copyAs(_ sender: NSMenuItem) {
+            guard let f = sender.representedObject as? String, let format = ResultExport.Format(rawValue: f) else { return }
+            copy(format, header: true)
+        }
+
+        @objc func copyCell(_ sender: Any?) {
+            guard let table, let s = source else { return }
+            let row = table.clickedRow >= 0 ? table.clickedRow : table.selectedRow
+            let col = table.clickedColumn
+            guard row >= 0, col > 0, let c = Int(table.tableColumns[col].identifier.rawValue) else { return }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(s.value(modelRow(row), c).exportString, forType: .string)
+        }
+
+        @objc func viewValue(_ sender: Any?) {
+            guard let table, table.clickedRow >= 0, table.clickedColumn > 0 else { return }
+            showValue(row: table.clickedRow, column: table.clickedColumn)
+        }
+
+        @objc func setNull(_ sender: Any?) {
+            guard let table, let s = source, let onEdit = s.onEdit else { return }
+            let col = table.clickedColumn
+            guard col > 0, let c = Int(table.tableColumns[col].identifier.rawValue) else { return }
+            for r in selectedModelRows() { onEdit(r, c, .null) }
+        }
+
+        @objc func deleteRows(_ sender: Any?) {
+            guard let s = source, let onDelete = s.onDeleteRows else { return }
+            onDelete(IndexSet(selectedModelRows()))
+        }
+
+        func makeMenu() -> NSMenu { NSMenu() }
+
+        func menuNeedsUpdate(_ menu: NSMenu) {
+            menu.removeAllItems()
+            func item(_ title: String, _ action: Selector, _ key: String = "") -> NSMenuItem {
+                let i = NSMenuItem(title: title, action: action, keyEquivalent: key)
+                i.target = self
+                return i
+            }
+            if (table?.clickedColumn ?? -1) > 0 {
+                menu.addItem(item("View Value", #selector(viewValue(_:))))
+                menu.addItem(item("Copy Cell Value", #selector(copyCell(_:))))
+                menu.addItem(.separator())
+            }
+            menu.addItem(item("Copy Rows", #selector(copyTSV(_:))))
+            menu.addItem(item("Copy Rows with Header", #selector(copyWithHeader(_:))))
+            let sub = NSMenu()
+            for f in ResultExport.Format.allCases {
+                let i = item(f.title, #selector(copyAs(_:)))
+                i.representedObject = f.rawValue
+                sub.addItem(i)
+            }
+            let copyAs = NSMenuItem(title: "Copy As", action: nil, keyEquivalent: "")
+            copyAs.submenu = sub
+            menu.addItem(copyAs)
+            if source?.onEdit != nil {
+                menu.addItem(.separator())
+                if (table?.clickedColumn ?? -1) > 0 { menu.addItem(item("Set NULL", #selector(setNull(_:)))) }
+                menu.addItem(item("Delete Rows", #selector(deleteRows(_:))))
+            }
+        }
+    }
+}
+
+final class GridTableView: NSTableView {
+    weak var coordinator: ResultGridView.Coordinator?
+
+    @objc func copy(_ sender: Any?) { coordinator?.copy(.tsv, header: false) }
+
+    override func keyDown(with event: NSEvent) {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if flags.isEmpty || flags == .function, event.keyCode == 51 || event.keyCode == 117 {  // ⌫ / ⌦
+            coordinator?.deleteRows(nil)
+            return
+        }
+        super.keyDown(with: event)
+    }
+
+    override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(copy(_:)) { return numberOfSelectedRows > 0 }
+        return super.validateUserInterfaceItem(item)
+    }
+}
+
+extension SQLValue {
+    var isBlob: Bool { if case .blob = self { true } else { false } }
+}

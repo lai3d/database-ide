@@ -5,6 +5,11 @@ public struct SQLStatement: Sendable, Equatable {
     public var text: String
     /// UTF-16 range of `text` within the script.
     public var range: NSRange
+
+    public init(text: String, range: NSRange) {
+        self.text = text
+        self.range = range
+    }
 }
 
 /// Splits a script into statements the way a console does: on `;` outside of
@@ -108,17 +113,22 @@ public enum SQLSplitter {
         if let hit = all.first(where: { offset >= $0.range.location && offset <= NSMaxRange($0.range) }) {
             return hit
         }
-        if let before = all.last(where: { NSMaxRange($0.range) <= offset }) {
-            // Only if nothing but whitespace/`;` separates the caret from it.
-            let ns = script as NSString
-            let gap = ns.substring(with: NSRange(location: NSMaxRange(before.range), length: offset - NSMaxRange(before.range)))
-            if gap.trimmingCharacters(in: CharacterSet(charactersIn: "; \t\r")).isEmpty { return before }
+        let ns = script as NSString
+        func gap(_ a: Int, _ b: Int) -> String { ns.substring(with: NSRange(location: a, length: max(0, b - a))) }
+        func blank(_ g: String) -> Bool {
+            g.trimmingCharacters(in: CharacterSet(charactersIn: ";").union(.whitespacesAndNewlines)).isEmpty
         }
-        return all.first(where: { $0.range.location >= offset }).flatMap { st in
-            let ns = script as NSString
-            let gap = ns.substring(with: NSRange(location: offset, length: st.range.location - offset))
-            return gap.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? st : nil
+        let before = all.last(where: { NSMaxRange($0.range) <= offset })
+        let after = all.first(where: { $0.range.location >= offset })
+        // Same line as the end of the previous statement → that statement.
+        if let before, case let g = gap(NSMaxRange(before.range), offset), blank(g), !g.contains("\n") {
+            return before
         }
+        // Otherwise the next statement if only whitespace precedes it…
+        if let after, blank(gap(offset, after.range.location)) { return after }
+        // …or the previous one (e.g. caret at the end of the document).
+        if let before, blank(gap(NSMaxRange(before.range), offset)) { return before }
+        return nil
     }
 
     private static func makeStatement(_ s: [UInt16], _ start: Int, _ end: Int) -> SQLStatement? {

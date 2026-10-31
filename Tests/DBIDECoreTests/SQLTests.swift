@@ -61,6 +61,12 @@ import Testing
         #expect(SQLSplitter.statement(at: ns.length, in: sql, dialect: .postgres)?.text == "select 3")
         // Blank line between statements → next statement.
         #expect(SQLSplitter.statement(at: ns.range(of: "\n\n").location + 1, in: sql, dialect: .postgres)?.text == "select 3")
+        // Caret on a blank line after the last statement → the last statement.
+        let tail = "select 1;\n\n"
+        #expect(SQLSplitter.statement(at: (tail as NSString).length, in: tail, dialect: .postgres)?.text == "select 1")
+        // A leading comment belongs to the statement that follows it.
+        let mid = "select 1;\n-- note\nselect 2;"
+        #expect(SQLSplitter.statement(at: (mid as NSString).range(of: "note").location, in: mid, dialect: .postgres)?.text == "-- note\nselect 2")
     }
 
     @Test func rangesAreUTF16() {

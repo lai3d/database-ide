@@ -15,6 +15,7 @@ public final class MySQLConnection: DatabaseConnection, @unchecked Sendable {
 
     // Capability flags.
     private static let longPassword: UInt32 = 0x1
+    private static let foundRows: UInt32 = 0x2  // affected rows = matched rows
     private static let longFlag: UInt32 = 0x4
     private static let connectWithDB: UInt32 = 0x8
     private static let protocol41: UInt32 = 0x200
@@ -117,7 +118,7 @@ public final class MySQLConnection: DatabaseConnection, @unchecked Sendable {
             if caps & Self.pluginAuth != 0, !r.atEnd { plugin = try r.cString() }
         }
 
-        var flags: UInt32 = Self.longPassword | Self.longFlag | Self.protocol41 | Self.transactions
+        var flags: UInt32 = Self.longPassword | Self.foundRows | Self.longFlag | Self.protocol41 | Self.transactions
             | Self.secureConnection | Self.multiStatements | Self.multiResults | Self.pluginAuth
             | Self.pluginAuthLenenc
         if !database.isEmpty { flags |= Self.connectWithDB }
