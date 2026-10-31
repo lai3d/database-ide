@@ -28,6 +28,12 @@ struct ConsoleView: View {
                     .frame(minHeight: 120, idealHeight: 280)
             }
         }
+        .sheet(item: $console.parameterRequest) { request in
+            ParameterSheet(request: request) { result in
+                request.finish(result)
+                console.parameterRequest = nil
+            }
+        }
     }
 
     private var toolbar: some View {
@@ -125,6 +131,39 @@ struct ConsoleView: View {
         .background {
             if let c = console.dataSource.flatMap({ DataSourceColor.of($0.config) }) { c.opacity(0.12) }
         }
+    }
+}
+
+/// Values for `:name` / `$1` / `?` placeholders, inserted as typed SQL.
+private struct ParameterSheet: View {
+    let request: ParameterRequest
+    let done: ([String: String]?) -> Void
+    @State private var values: [String: String] = [:]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Parameters").font(.headline)
+            Text("Values are inserted as SQL — quote text: 'abc'. Use NULL for null.")
+                .font(.caption).foregroundStyle(.secondary)
+            Form {
+                ForEach(request.names, id: \.self) { name in
+                    TextField(name, text: Binding(get: { values[name] ?? "" }, set: { values[name] = $0 }))
+                        .font(.system(.body, design: .monospaced))
+                }
+            }
+            .formStyle(.grouped)
+            HStack {
+                Spacer()
+                Button("Cancel") { done(nil) }.keyboardShortcut(.cancelAction)
+                Button("Execute") { done(values) }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(request.names.contains { (values[$0] ?? "").trimmingCharacters(in: .whitespaces).isEmpty })
+            }
+        }
+        .padding()
+        .frame(width: 420)
+        .onAppear { values = request.values }
+        .onDisappear { request.finish(nil) }  // no-op if already finished
     }
 }
 

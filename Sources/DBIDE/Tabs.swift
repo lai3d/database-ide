@@ -20,6 +20,26 @@ struct ResultTab: Identifiable {
     var plan: ExplainResult? = nil
 }
 
+/// A pending "enter parameter values" prompt; resumed exactly once.
+@MainActor
+final class ParameterRequest: Identifiable {
+    let id = UUID()
+    let names: [String]
+    var values: [String: String]
+    private var continuation: CheckedContinuation<[String: String]?, Never>?
+
+    init(names: [String], values: [String: String], continuation: CheckedContinuation<[String: String]?, Never>) {
+        self.names = names
+        self.values = values
+        self.continuation = continuation
+    }
+
+    func finish(_ result: [String: String]?) {
+        continuation?.resume(returning: result)
+        continuation = nil
+    }
+}
+
 /// Where in the editor the user asked to run.
 enum RunScope { case caretOrSelection, all }
 
@@ -147,7 +167,31 @@ final class ConsoleModel: Identifiable {
         Task { await execute(statements) }
     }
 
+    var parameterRequest: ParameterRequest?
+    @ObservationIgnored var lastParameterValues: [String: String] = [:]
+
+    /// Asks for values of bind parameters used in `statements`; nil when cancelled.
+    private func resolveParameters(_ statements: [SQLStatement]) async -> [SQLStatement]? {
+        var names: [String] = []
+        for st in statements {
+            for n in SQLParameters.names(in: st.text, dialect: dialect) where !names.contains(n) { names.append(n) }
+        }
+        guard !names.isEmpty else { return statements }
+        let prefill = lastParameterValues.filter { names.contains($0.key) }
+        guard let values = await withCheckedContinuation({ (c: CheckedContinuation<[String: String]?, Never>) in
+            parameterRequest = ParameterRequest(names: names, values: prefill, continuation: c)
+        }) else { return nil }
+        lastParameterValues.merge(values) { $1 }
+        return statements.map {
+            SQLStatement(text: SQLParameters.substitute($0.text, values: values, dialect: dialect), range: $0.range)
+        }
+    }
+
     func execute(_ statements: [SQLStatement]) async {
+        guard let statements = await resolveParameters(statements) else {
+            log.append(LogEntry(kind: .info, text: "Cancelled"))
+            return
+        }
         if let config = dataSource?.config, !confirmWrites(statements.map(\.text), on: config) {
             log.append(LogEntry(kind: .info, text: "Cancelled — data source requires confirmation for changes"))
             return

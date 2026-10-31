@@ -46,7 +46,7 @@ Estimates are Claude Code session time.
 |---|---|---|---|
 | 3.1 | ✅ Completion popup | Pops up while typing / after `.` / ⌃Space; icons for table, view, column, schema, alias, keyword; context-aware (tables after FROM/JOIN, columns in SELECT/WHERE), alias and `schema.` resolution, quotes names when needed, loads metadata lazily and refreshes. Engine in Core (`SQLCompletion`) with tests | 0.6h |
 | 3.2 | ✅ SQL formatter | ⌥⌘L reformats the selection or the console: clause per line, aligned select list, AND/OR breaks (BETWEEN-aware), indented subqueries, upper-case keywords; only whitespace/keyword case change (tested for idempotence and token preservation) | 0.4h |
-| 3.3 | ⬜ Bind parameters | Prompt for `?` / `:name` / `$1` values before running | 0.4h |
+| 3.3 | ✅ Bind parameters | Prompts for `:name` / `$1` / `?` (not in PG, where `?` is a jsonb operator; MySQL `@vars` untouched), remembers last values, substitutes outside strings/comments | 0.3h |
 | 3.4 | ✅ Explain plan | ⌥⌘E / ⇧⌥⌘E (analyze) on the statement at the caret: PG JSON, MySQL TREE / EXPLAIN ANALYZE, SQLite QUERY PLAN → one tree with cost, estimated vs actual rows (misestimates flagged), self-time bars, raw view; ANALYZE of DML is rolled back | 0.5h |
 | 3.5 | ✅ Transaction mode | Auto / Manual per console, Commit (⇧⌘K) / Rollback, "Transaction open" indicator driven by the server's own status (PG ReadyForQuery, MySQL status flags, SQLite autocommit) so a typed BEGIN is tracked too; prompt when closing a console with an open transaction | 0.4h |
 | 3.6 | ⬜ Pinned results & paging in console | Keep result tabs across runs; fetch next page instead of a hard row limit | 0.5h |
@@ -68,7 +68,7 @@ Estimates are Claude Code session time.
 | 5.1 | ⬜ Settings | Fonts, default row limit, confirm-on-DML for read-write prod data sources | 0.4h |
 | 5.2 | ✅ Data source colors & write guard | Color tag (e.g. red = production) on tabs, console toolbar and explorer; optional "confirm before modifying data" — classifies statements (data-modifying CTEs, SELECT INTO, EXPLAIN ANALYZE DML…) and asks before console runs and table-editor submits | 0.3h |
 | 5.2b | ⬜ Data source folders | Group data sources in the explorer | 0.2h |
-| 5.3 | ⬜ CI & packaging | GitHub Actions build + unit tests (+ docker service containers), app icon, release `.app` zip | 0.5h |
+| 5.3 | ✅ CI & packaging | GitHub Actions on macOS: build, unit tests, bundled `.app` artifact; `v*` tag publishes a release zip; app icon; version from tag (server tests run locally via `scripts/test-servers.sh`) | 0.3h |
 
 **User must do manually** (duration outside Claude's control): Apple Developer Program enrollment,
 Developer ID certificate, notarization credentials — only needed to ship a signed/notarized build to others.
