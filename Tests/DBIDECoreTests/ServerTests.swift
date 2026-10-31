@@ -212,7 +212,8 @@ struct PostgresTLSTests {
 
         for mode in [SSLMode.prefer, .require] {
             let c = try await connect(mode)
-            #expect(c.securityDescription?.hasPrefix("TLS") == true)
+            #expect(c.securityDescription?.hasPrefix("TLSv1.3") == true, "\(c.securityDescription ?? "nil")")
+            #expect(try await c.strings("SELECT version FROM pg_stat_ssl WHERE pid = pg_backend_pid()") == ["TLSv1.3"])
             #expect(try await usesSSL(c))
             // Big result over TLS (many records).
             let n = try await c.execute("SELECT repeat('x', 1000) FROM generate_series(1, 2000)").rows.count
@@ -259,7 +260,8 @@ struct MySQLTLSTests {
 
     @Test func requireAndFullAuth() async throws {
         let c = try await connect(.require)
-        #expect(c.securityDescription != nil)
+        #expect(c.securityDescription?.hasPrefix("TLSv1.3") == true)
+        #expect(try await c.execute("SHOW SESSION STATUS LIKE 'Ssl_version'").rows.first?[1] == .text("TLSv1.3"))
         #expect(try await cipher(c) != "")
 
         // Fresh caching_sha2 users force full authentication on first login:

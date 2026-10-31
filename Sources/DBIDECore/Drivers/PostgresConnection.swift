@@ -7,7 +7,6 @@ import Foundation
 public final class PostgresConnection: DatabaseConnection, @unchecked Sendable {
     public let dialect = SQLDialect.postgres
     public private(set) var serverVersion = "PostgreSQL"
-    private let socket: TCPSocket
     private var stream: any ByteStream
     public private(set) var securityDescription: String?
     public private(set) var inTransaction = false
@@ -33,32 +32,37 @@ public final class PostgresConnection: DatabaseConnection, @unchecked Sendable {
     private init(host: String, port: Int, user: String, password: String, database: String, tls: TLSOptions) throws {
         self.host = host
         self.port = port
-        socket = try TCPSocket(host: host, port: port)
-        stream = socket
+        stream = try Self.open(host: host, port: port, tls: tls)
+        if let t = stream as? NWTLSStream { securityDescription = t.negotiatedDescription }
         do {
-            try negotiateTLS(tls)
             try startup(user: user, password: password, database: database.isEmpty ? user : database)
         } catch {
-            socket.close()
+            stream.close()
             throw error
         }
     }
 
     // MARK: TLS
 
-    private func negotiateTLS(_ tls: TLSOptions) throws {
-        guard tls.mode != .disable else { return }
+    /// Plain TCP, or TLS negotiated with an SSLRequest below the TLS layer.
+    private static func open(host: String, port: Int, tls: TLSOptions) throws -> any ByteStream {
+        guard tls.mode != .disable else { return try TCPSocket(host: host, port: port) }
         var w = ByteWriter()
         w.int32BE(8)
         w.int32BE(80877103)  // SSLRequest
-        try socket.write(w.bytes)
-        let answer = try socket.read(1)[0]
-        if answer == UInt8(ascii: "S") {
-            let t = try TLSStream(socket: socket, host: host, options: tls)
-            stream = t
-            securityDescription = t.negotiatedDescription
-        } else if tls.mode.requiresTLS {
-            throw DatabaseError("Server does not support SSL, but SSL mode is \(tls.mode.rawValue)")
+        let preamble = TLSPreamble([
+            .write(w.bytes),
+            .read(1, { answer in
+                guard answer[0] == UInt8(ascii: "S") else {
+                    throw TLSRefused(message: "Server does not support SSL, but SSL mode is \(tls.mode.rawValue)")
+                }
+                return []
+            }),
+        ])
+        do {
+            return try NWTLSStream(host: host, port: port, options: tls, preamble: preamble)
+        } catch where tls.mode == .prefer {
+            return try TCPSocket(host: host, port: port)  // like libpq: retry without SSL
         }
     }
 
@@ -288,7 +292,7 @@ public final class PostgresConnection: DatabaseConnection, @unchecked Sendable {
 
     public func close() async {
         try? stream.write([UInt8(ascii: "X"), 0, 0, 0, 4])
-        socket.close()
+        stream.close()
     }
 }
 

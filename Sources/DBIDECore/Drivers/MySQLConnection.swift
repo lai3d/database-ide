@@ -7,7 +7,6 @@ import Security
 public final class MySQLConnection: DatabaseConnection, @unchecked Sendable {
     public let dialect = SQLDialect.mysql
     public private(set) var serverVersion = "MySQL"
-    private let socket: TCPSocket
     private var stream: any ByteStream
     public private(set) var securityDescription: String?
     public private(set) var inTransaction = false
@@ -47,14 +46,76 @@ public final class MySQLConnection: DatabaseConnection, @unchecked Sendable {
         self.user = user
         self.password = password
         self.tls = tls
-        socket = try TCPSocket(host: host, port: port)
-        stream = socket
+        if tls.mode != .disable {
+            let preamble = TLSPreamble([])
+            preamble.steps = [
+                .read(4, { header in
+                    let length = Int(header[0]) | Int(header[1]) << 8 | Int(header[2]) << 16
+                    return [.read(length, { payload in
+                        preamble.captured = payload
+                        let caps = try Self.serverCapabilities(payload)
+                        guard caps & Self.clientSSL != 0 else {
+                            throw TLSRefused(message: "Server does not support SSL, but SSL mode is \(tls.mode.rawValue)")
+                        }
+                        // SSLRequest: the first 32 bytes of the handshake response, then TLS starts.
+                        let flags = Self.clientFlags(serverCaps: caps, database: database) | Self.clientSSL
+                        var body = ByteWriter()
+                        body.intLE(UInt64(flags), size: 4)
+                        body.intLE(16 * 1024 * 1024, size: 4)
+                        body.u8(45)
+                        body.append([UInt8](repeating: 0, count: 23))
+                        var packet = ByteWriter()
+                        packet.intLE(UInt64(body.bytes.count), size: 3)
+                        packet.u8(header[3] &+ 1)
+                        packet.append(body.bytes)
+                        return [.write(packet.bytes)]
+                    })]
+                }),
+            ]
+            do {
+                let t = try NWTLSStream(host: host, port: port, options: tls, preamble: preamble)
+                stream = t
+                securityDescription = t.negotiatedDescription
+                sequence = 2
+                do {
+                    try handshake(database: database, greeting: preamble.captured)
+                } catch {
+                    t.close()
+                    throw error
+                }
+                return
+            } catch where tls.mode == .prefer && (error is TLSRefused || !(error is DatabaseError && (error as! DatabaseError).code != nil)) {
+                // fall back to a plain connection below
+            }
+        }
+        stream = try TCPSocket(host: host, port: port)
         do {
-            try handshake(database: database)
+            try handshake(database: database, greeting: nil)
         } catch {
-            socket.close()
+            stream.close()
             throw error
         }
+    }
+
+    private static func serverCapabilities(_ greeting: [UInt8]) throws -> UInt32 {
+        if greeting.first == 0xFF { throw parseError(greeting) }
+        var r = ByteReader(greeting)
+        _ = try r.u8()
+        _ = try r.cString()
+        try r.skip(4 + 8 + 1)
+        var caps = UInt32(try r.uintLE(2))
+        if !r.atEnd {
+            try r.skip(3)
+            caps |= UInt32(try r.uintLE(2)) << 16
+        }
+        return caps
+    }
+
+    private static func clientFlags(serverCaps caps: UInt32, database: String) -> UInt32 {
+        var flags: UInt32 = longPassword | foundRows | longFlag | protocol41 | transactions
+            | secureConnection | multiStatements | multiResults | pluginAuth | pluginAuthLenenc
+        if !database.isEmpty { flags |= connectWithDB }
+        return flags & (caps | connectWithDB)
     }
 
     // MARK: Packets
@@ -100,8 +161,8 @@ public final class MySQLConnection: DatabaseConnection, @unchecked Sendable {
 
     // MARK: Handshake
 
-    private func handshake(database: String) throws {
-        let greeting = try readPacket()
+    private func handshake(database: String, greeting preRead: [UInt8]?) throws {
+        let greeting = try preRead ?? readPacket()
         if greeting.first == 0xFF { throw Self.parseError(greeting) }
         var r = ByteReader(greeting)
         let proto = try r.u8()
@@ -126,29 +187,8 @@ public final class MySQLConnection: DatabaseConnection, @unchecked Sendable {
             if caps & Self.pluginAuth != 0, !r.atEnd { plugin = try r.cString() }
         }
 
-        var flags: UInt32 = Self.longPassword | Self.foundRows | Self.longFlag | Self.protocol41 | Self.transactions
-            | Self.secureConnection | Self.multiStatements | Self.multiResults | Self.pluginAuth
-            | Self.pluginAuthLenenc
-        if !database.isEmpty { flags |= Self.connectWithDB }
-        flags &= caps | Self.connectWithDB
-
-        if tls.mode != .disable {
-            if caps & Self.clientSSL != 0 {
-                flags |= Self.clientSSL
-                // SSLRequest: the first 32 bytes of the handshake response, then upgrade.
-                var ssl = ByteWriter()
-                ssl.intLE(UInt64(flags), size: 4)
-                ssl.intLE(16 * 1024 * 1024, size: 4)
-                ssl.u8(45)
-                ssl.append([UInt8](repeating: 0, count: 23))
-                try writePacket(ssl.bytes)
-                let t = try TLSStream(socket: socket, host: host, options: tls)
-                stream = t
-                securityDescription = t.negotiatedDescription
-            } else if tls.mode.requiresTLS {
-                throw DatabaseError("Server does not support SSL, but SSL mode is \(tls.mode.rawValue)")
-            }
-        }
+        var flags = Self.clientFlags(serverCaps: caps, database: database)
+        if stream is NWTLSStream { flags |= Self.clientSSL }
 
         let authResponse = try scrambleResponse(plugin: plugin, scramble: scramble)
         var w = ByteWriter()
@@ -365,7 +405,7 @@ public final class MySQLConnection: DatabaseConnection, @unchecked Sendable {
     public func close() async {
         sequence = 0
         try? writePacket([0x01])
-        socket.close()
+        stream.close()
     }
 }
 

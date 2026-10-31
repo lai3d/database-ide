@@ -14,7 +14,7 @@ Estimates are Claude Code session time.
 - ✅ SQL lexer (highlighting) and statement splitter (dollar quotes, nested comments, trigger bodies, MySQL `DELIMITER`)
 - ✅ Introspection: schemas, tables / views, columns, indexes, routines, DDL (all three dialects)
 - ✅ Export: CSV / TSV / JSON / Markdown / SQL INSERT
-- ✅ Tests: unit tests + docker-backed PostgreSQL 16 (TLS) / MySQL 8.4 / MongoDB 7 / SSH bastion tests (`scripts/test-servers.sh`) — 102 tests
+- ✅ Tests: unit tests + docker-backed PostgreSQL 16 (TLS) / MySQL 8.4 / MongoDB 7 / SSH bastion tests (`scripts/test-servers.sh`) — 103 tests
 
 ## Phase 1 — Core IDE (MVP)
 
@@ -35,7 +35,7 @@ Estimates are Claude Code session time.
 | # | Item | Notes | Est. |
 |---|---|---|---|
 | 2.1 | ✅ TLS | PostgreSQL `SSLRequest` + MySQL SSL upgrade; modes disable / prefer (default) / require / verify-ca / verify-full, custom root CA; 🔒 in explorer, Test Connection and console log. Tested against TLS-enabled PG 16 and MySQL 8.4 | 0.6h |
-| 2.1b | ⬜ TLS 1.3 | Current TLS layer is SecureTransport (TLS 1.2 max, deprecated by Apple); move to Network.framework with a STARTTLS framer | 0.8h |
+| 2.1b | ✅ TLS 1.3 | Network.framework TLS (1.2 / 1.3) replaces SecureTransport; a framer below TLS runs the PostgreSQL SSLRequest / MySQL greeting + SSL request (STARTTLS), MongoDB uses direct TLS; servers confirm TLSv1.3 in tests; "prefer" falls back to plain when the server declines | 0.4h |
 | 2.2 | ✅ SSH tunnel | System `ssh -L` (agent or key file), shared per target, restarted if it dies, closed on quit; TLS inside the tunnel verifies the real DB host name. Tested through a docker sshd bastion | 0.4h |
 | 2.3 | ✅ Connection URL import | Paste `postgres://`, `mysql://`, `jdbc:…`, `sqlite://` or a file path into the dialog; also reads sslmode / sslrootcert / useSSL | 0.2h |
 | 2.4 | 🚧 More engines | MongoDB ✅ (see Phase 2.5); next maybe ClickHouse (HTTP) / SQL Server (TDS) / Redis | 1h+ each |

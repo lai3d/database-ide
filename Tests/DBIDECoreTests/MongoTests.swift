@@ -264,3 +264,22 @@ struct MongoShellLiveTests {
         #expect(!q.config.srv && q.config.port == 27018 && q.config.sslMode == .disable)
     }
 }
+
+/// DBIDE_MONGO_TLS=host:port (TLS-only mongod, no auth) and DBIDE_PG_CA for its certificate.
+@Suite(.enabled(if: ProcessInfo.processInfo.environment["DBIDE_MONGO_TLS"] != nil))
+struct MongoTLSTests {
+    @Test func directTLS() async throws {
+        let p = ProcessInfo.processInfo.environment["DBIDE_MONGO_TLS"]!.split(separator: ":")
+        let host = String(p[0]), port = Int(p[1])!
+        let ca = ProcessInfo.processInfo.environment["DBIDE_PG_CA"]
+        let c = try await MongoConnection.connect(host: host, port: port, user: "", password: "", database: "test",
+                                                  tls: TLSOptions(mode: .verifyFull, rootCertificatePath: ca))
+        #expect(c.securityDescription?.hasPrefix("TLSv1.3") == true)
+        #expect(try await c.runCommand(["ping": .int32(1)])["ok"] != nil)
+        await c.close()
+        // Without TLS the server hangs up.
+        await #expect(throws: (any Error).self) {
+            _ = try await MongoConnection.connect(host: host, port: port, user: "", password: "", database: "test")
+        }
+    }
+}

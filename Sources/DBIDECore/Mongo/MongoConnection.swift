@@ -9,7 +9,6 @@ public final class MongoConnection: @unchecked Sendable {
     public private(set) var isWritablePrimary = true
     public private(set) var primaryHost: String?
 
-    private let socket: TCPSocket
     private var stream: any ByteStream
     private let worker = SerialWorker(label: "dbide.mongo")
     private var requestID: Int32 = 0
@@ -36,18 +35,18 @@ public final class MongoConnection: @unchecked Sendable {
         self.authSource = authSource
         self.database = database.isEmpty ? "test" : database
         self.tls = tls
-        socket = try TCPSocket(host: host, port: port)
-        stream = socket
+        // MongoDB speaks TLS from the first byte (no negotiation), so "prefer" means plain.
+        if tls.mode.requiresTLS {
+            let t = try NWTLSStream(host: host, port: port, options: tls)
+            stream = t
+            securityDescription = t.negotiatedDescription
+        } else {
+            stream = try TCPSocket(host: host, port: port)
+        }
         do {
-            // MongoDB speaks TLS from the first byte (no negotiation), so "prefer" means plain.
-            if tls.mode.requiresTLS {
-                let t = try TLSStream(socket: socket, host: host, options: tls)
-                stream = t
-                securityDescription = t.negotiatedDescription
-            }
             try handshake()
         } catch {
-            socket.close()
+            stream.close()
             throw error
         }
     }
@@ -261,7 +260,7 @@ public final class MongoConnection: @unchecked Sendable {
     }
 
     public func close() async {
-        socket.close()
+        stream.close()
     }
 
     /// Runs work on the connection's serial queue (used by the shell layer).
@@ -269,7 +268,6 @@ public final class MongoConnection: @unchecked Sendable {
         try await worker.run(body)
     }
 
-    func shutdownSocket() { socket.shutdown() }
 
     private let tagLock = NSLock()
     private var _runningTag: String?

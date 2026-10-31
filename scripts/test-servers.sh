@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-docker rm -f dbide-pg dbide-mysql dbide-ssh dbide-mongo >/dev/null 2>&1 || true
+docker rm -f dbide-pg dbide-mysql dbide-ssh dbide-mongo dbide-mongo-tls >/dev/null 2>&1 || true
 docker network create dbide-net >/dev/null 2>&1 || true
 # PostgreSQL with a self-signed certificate for localhost (generated here; the image has no openssl).
 # Plain connections are still allowed.
@@ -22,6 +22,12 @@ docker run -d --name dbide-mysql -e MYSQL_ROOT_PASSWORD=secret -e MYSQL_DATABASE
 # MongoDB 7 with auth.
 docker run -d --name dbide-mongo -e MONGO_INITDB_ROOT_USERNAME=root -e MONGO_INITDB_ROOT_PASSWORD=secret -p 57017:27017 mongo:7 >/dev/null
 
+# TLS-only MongoDB (no auth) using the same self-signed certificate.
+cat "$CERTS/server.key" "$CERTS/server.crt" > "$CERTS/mongo.pem"
+docker run -d --name dbide-mongo-tls -p 57018:27017 -v "$CERTS:/certs:ro" mongo:7 \
+  mongod --tlsMode requireTLS --tlsCertificateKeyFile /certs/mongo.pem --tlsCAFile /certs/server.crt \
+         --tlsAllowConnectionsWithoutCertificates --bind_ip_all >/dev/null
+
 # SSH bastion (key auth, TCP forwarding) on the same network: tunnel tests reach dbide-pg:5432 through it.
 rm -f "$CERTS/ssh_key" "$CERTS/ssh_key.pub" "$CERTS/known_hosts"
 ssh-keygen -q -t ed25519 -N "" -f "$CERTS/ssh_key"
@@ -36,6 +42,7 @@ echo "Waiting for servers…"
 until docker exec dbide-pg pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1; do sleep 1; done
 until docker exec dbide-mysql mysql -uroot -psecret -e 'select 1' >/dev/null 2>&1; do sleep 1; done
 until docker exec dbide-mongo mongosh -u root -p secret --quiet --eval 'db.runCommand({ping:1})' >/dev/null 2>&1; do sleep 1; done
+until docker logs dbide-mongo-tls 2>&1 | grep -q "Waiting for connections"; do sleep 1; done
 until nc -z 127.0.0.1 52222 2>/dev/null && docker logs dbide-ssh 2>&1 | grep -q "Server listening"; do sleep 1; done
 
 DBIDE_PG=localhost:55432:postgres:secret:dbide \
@@ -43,4 +50,5 @@ DBIDE_PG_CA="$CERTS/server.crt" \
 DBIDE_SSH="127.0.0.1:52222:tunnel:$CERTS/ssh_key:$CERTS/known_hosts" \
 DBIDE_MYSQL=127.0.0.1:53306:root:secret:dbide \
 DBIDE_MONGO=127.0.0.1:57017:root:secret \
+DBIDE_MONGO_TLS=localhost:57018 \
   swift test "$@"
