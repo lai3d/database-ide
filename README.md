@@ -32,6 +32,8 @@ Supports **PostgreSQL, MySQL/MariaDB, SQLite, SQL Server, ClickHouse, MongoDB an
 - **Redis**: redis-cli style console (quoting, escapes), key browser per database with type-aware value views.
 - **Transactions**: Auto / Manual commit per console, Commit (⇧⌘K) / Rollback, open-transaction indicator.
 - **Formatter** (⌥⌘L) for the selection or the whole console.
+- **Schema compare** (Database → Compare Schemas…): diff any two SQL schemas and get migration SQL for the target.
+- **Result grid tools**: quick filter, record view, column menu, aggregates of selected cells.
 - **DDL viewer**, **query history** (⇧⌘E), consoles and their text persist across launches.
 
 ## Requirements

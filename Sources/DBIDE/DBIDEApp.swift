@@ -86,6 +86,8 @@ struct DBIDEApp: App {
                     }
                 }
                 .disabled({ if case .table = model.selectedTab { return model.activeDataSource?.config.dialect.isSQL != true }; return true }())
+                Button("Compare Schemas…") { model.showCompare = true }
+                    .disabled(!model.dataSources.contains { $0.config.dialect.isSQL })
                 Button("Refresh Data Source") { Task { await model.activeDataSource?.refresh() } }
                     .disabled(model.activeDataSource?.isConnected != true)
             }

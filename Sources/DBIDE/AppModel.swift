@@ -46,6 +46,7 @@ final class AppModel {
     var showGoTo = false
     var csvImport: CSVImportTarget?
     var tableDesign: TableDesignTarget?
+    var showCompare = false
 
     private let store = Store()
     private var saveTask: Task<Void, Never>?

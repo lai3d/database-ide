@@ -27,6 +27,7 @@ struct ContentView: View {
         .sheet(isPresented: $app.showGoTo) { GoToTableView() }
         .sheet(item: $app.csvImport) { CSVImportView(target: $0) }
         .sheet(item: $app.tableDesign) { TableDesignerView(target: $0) }
+        .sheet(isPresented: $app.showCompare) { SchemaCompareView() }
         .inspector(isPresented: $app.showHistory) {
             HistoryView().inspectorColumnWidth(min: 240, ideal: 320, max: 500)
         }

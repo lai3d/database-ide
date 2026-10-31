@@ -43,7 +43,7 @@ struct SQLEditorView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSScrollView {
         let textView = SQLTextView(usingTextLayoutManager: false)
-        let scrollView = NSScrollView()
+        let scrollView = RulerScrollView()
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = true
         scrollView.autohidesScrollers = true
@@ -98,8 +98,10 @@ struct SQLEditorView: NSViewRepresentable {
             // External change (history insert, restore): keep undo coherent.
             let sel = textView.selectedRange()
             if !textView.isEditable {
-                // Read-only views (DDL, JSON results) refuse shouldChangeText; just replace.
+                // Read-only views (DDL, JSON results) refuse shouldChangeText; just replace and show the start.
                 textView.string = text
+                scrollView.contentView.scroll(to: NSPoint(x: -scrollView.contentView.contentInsets.left, y: -scrollView.contentView.contentInsets.top))
+                scrollView.reflectScrolledClipView(scrollView.contentView)
             } else if textView.shouldChangeText(in: NSRange(location: 0, length: (textView.string as NSString).length), replacementString: text) {
                 textView.string = text
                 textView.didChangeText()
@@ -345,6 +347,27 @@ final class SQLTextView: NSTextView {
             textStorage?.replaceCharacters(in: lines, with: replacement)
             didChangeText()
             setSelectedRange(NSRange(location: lines.location, length: (replacement as NSString).length))
+        }
+    }
+}
+
+/// On macOS 14+ rulers overlay the content: the clip view gets a left inset equal to the
+/// ruler width, so the true left edge is x = -inset. The inset can arrive after the text is
+/// loaded, leaving the view at x = 0 with the first characters hidden under the gutter.
+/// Re-anchor to the left edge whenever the inset changes and the view was at the old edge.
+/// (Same fix as lai3d/esp32-ide 2f59ea3.)
+final class RulerScrollView: NSScrollView {
+    private var lastInset: CGFloat = 0
+
+    override func tile() {
+        let wasAtLeftEdge = contentView.bounds.origin.x <= -lastInset + 0.5
+        super.tile()
+        let inset = contentView.contentInsets.left
+        guard inset != lastInset else { return }
+        lastInset = inset
+        if wasAtLeftEdge {
+            contentView.scroll(to: NSPoint(x: -inset, y: contentView.bounds.origin.y))
+            reflectScrolledClipView(contentView)
         }
     }
 }
