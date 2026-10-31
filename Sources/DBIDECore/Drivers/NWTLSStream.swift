@@ -17,6 +17,15 @@ final class TLSPreamble: @unchecked Sendable {
     var refusal: Error?
     /// Bytes the preamble consumed that the driver still needs (MySQL greeting).
     var captured: [UInt8] = []
+    /// SQL Server (TDS 7.x): carry the TLS handshake inside PRELOGIN packets, then raw TLS.
+    var tdsWrapHandshake = false
+    private let doneLock = NSLock()
+    private var _handshakeDone = false
+    /// Set by the stream once TLS is established (the framer then stops wrapping).
+    var handshakeDone: Bool {
+        get { doneLock.lock(); defer { doneLock.unlock() }; return _handshakeDone }
+        set { doneLock.lock(); _handshakeDone = newValue; doneLock.unlock() }
+    }
 
     init(_ steps: [Step]) { self.steps = steps }
 }
@@ -90,6 +99,7 @@ final class NWTLSStream: ByteStream, @unchecked Sendable {
             if let refusal = preamble?.refusal { throw refusal }
             throw DatabaseError("TLS connection failed: \((e as? NWError).map(Self.describe) ?? e.localizedDescription)")
         }
+        preamble?.handshakeDone = true
         if let meta = connection.metadata(definition: NWProtocolTLS.definition) as? NWProtocolTLS.Metadata {
             let v = sec_protocol_metadata_get_negotiated_tls_protocol_version(meta.securityProtocolMetadata)
             let version = v == .TLSv13 ? "TLSv1.3" : v == .TLSv12 ? "TLSv1.2" : "TLS"
@@ -191,9 +201,31 @@ final class PreambleFramer: NWProtocolFramerImplementation {
             }
         }
         if pendingRead == nil {
-            framer.markReady()
-            framer.passThroughInput()
-            framer.passThroughOutput()
+            if preamble?.tdsWrapHandshake == true {
+                wrapping = true
+                framer.markReady()  // TLS above starts; handshake records get wrapped below
+            } else {
+                framer.markReady()
+                framer.passThroughInput()
+                framer.passThroughOutput()
+            }
+        }
+    }
+
+    // MARK: TDS handshake wrapping
+
+    private var wrapping = false
+    private var outputPassThrough = false
+    private var inputPassThrough = false
+
+    /// Unwraps TDS packets from `inbox` and hands their payload (TLS records) up.
+    private func unwrapInput(_ framer: NWProtocolFramer.Instance) {
+        while inbox.count >= 8 {
+            let length = Int(inbox[2]) << 8 | Int(inbox[3])
+            guard length >= 8, inbox.count >= length else { return }
+            let payload = Data(inbox[8..<length])
+            inbox.removeFirst(length)
+            framer.deliverInput(data: payload, message: NWProtocolFramer.Message(definition: Self.definition), isComplete: true)
         }
     }
 
@@ -221,13 +253,45 @@ final class PreambleFramer: NWProtocolFramerImplementation {
             }
             guard ok, let chunk else { break }
             inbox.append(contentsOf: chunk)
-            deliver(framer)
+            if wrapping {
+                if preamble?.handshakeDone == true {
+                    // Raw TLS from now on: hand over what is buffered and stop parsing.
+                    if !inbox.isEmpty {
+                        framer.deliverInput(data: Data(inbox), message: NWProtocolFramer.Message(definition: Self.definition), isComplete: true)
+                        inbox.removeAll()
+                    }
+                    if !inputPassThrough {
+                        inputPassThrough = true
+                        framer.passThroughInput()
+                    }
+                    return 0
+                }
+                unwrapInput(framer)
+            } else {
+                deliver(framer)
+            }
         }
         return 0
     }
 
     func handleOutput(framer: NWProtocolFramer.Instance, message: NWProtocolFramer.Message, messageLength: Int, isComplete: Bool) {
-        try? framer.writeOutputNoCopy(length: messageLength)
+        guard wrapping, preamble?.handshakeDone != true else {
+            if wrapping, !outputPassThrough {
+                outputPassThrough = true
+                framer.passThroughOutput()
+            }
+            try? framer.writeOutputNoCopy(length: messageLength)
+            return
+        }
+        // TLS handshake record(s): send inside a PRELOGIN packet.
+        _ = framer.parseOutput(minimumIncompleteLength: messageLength, maximumLength: messageLength) { buffer, _ in
+            guard let buffer else { return 0 }
+            let n = buffer.count + 8
+            var packet = Data([0x12, 0x01, UInt8(n >> 8), UInt8(n & 0xFF), 0, 0, 0, 0])
+            packet.append(Data(buffer))
+            framer.writeOutput(data: packet)
+            return buffer.count
+        }
     }
 
     func wakeup(framer: NWProtocolFramer.Instance) {}

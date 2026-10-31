@@ -26,21 +26,77 @@ public final class SQLServerConnection: DatabaseConnection, @unchecked Sendable 
     }
 
     private init(host: String, port: Int, user: String, password: String, database: String, tls: TLSOptions) throws {
-        let strict = tls.mode.requiresTLS
-        if strict {
-            let t = try NWTLSStream(host: host, port: port, options: tls, alpn: ["tds/8.0"])
-            stream = t
-            securityDescription = t.negotiatedDescription + " (TDS 8 strict)"
-        } else {
-            stream = try TCPSocket(host: host, port: port)
+        if tls.mode != .disable {
+            // Classic TDS encryption: PRELOGIN in clear, TLS handshake inside PRELOGIN packets, then raw TLS.
+            let preamble = TLSPreamble([])
+            preamble.tdsWrapHandshake = true
+            preamble.steps = [
+                .write(Self.preloginPacket(encryption: 0x01)),  // ENCRYPT_ON
+                .read(8, { header in
+                    let length = Int(header[2]) << 8 | Int(header[3])
+                    return [.read(length - 8, { payload in
+                        let mode = Self.serverEncryption(payload)
+                        if mode == 0x02 {  // ENCRYPT_NOT_SUP
+                            throw TLSRefused(message: "The server does not support encryption, but SSL mode is \(tls.mode.rawValue)")
+                        }
+                        return []
+                    })]
+                }),
+            ]
+            do {
+                let t = try NWTLSStream(host: host, port: port, options: tls, preamble: preamble)
+                stream = t
+                securityDescription = t.negotiatedDescription
+                do {
+                    try login(host: host, user: user, password: password, database: database)
+                } catch {
+                    t.close()
+                    throw error
+                }
+                return
+            } catch where tls.mode == .prefer && !(error is DatabaseError && (error as! DatabaseError).code != nil) {
+                // fall back to an unencrypted connection below
+            }
         }
+        stream = try TCPSocket(host: host, port: port)
         do {
-            try prelogin(strict: strict)
+            try prelogin()
             try login(host: host, user: user, password: password, database: database)
         } catch {
             stream.close()
             throw error
         }
+    }
+
+    static func preloginPacket(encryption: UInt8) -> [UInt8] {
+        let options: [(UInt8, [UInt8])] = [
+            (0x00, [0x10, 0x00, 0x00, 0x00, 0x00, 0x00]),  // VERSION
+            (0x01, [encryption]),  // ENCRYPTION
+            (0x03, [0, 0, 0, 0]),  // THREADID
+            (0x04, [0]),  // MARS off
+        ]
+        var header: [UInt8] = []
+        var data: [UInt8] = []
+        let base = options.count * 5 + 1
+        for (token, value) in options {
+            let offset = base + data.count
+            header += [token, UInt8(offset >> 8), UInt8(offset & 0xFF), UInt8(value.count >> 8), UInt8(value.count & 0xFF)]
+            data += value
+        }
+        let payload = header + [0xFF] + data
+        let n = payload.count + 8
+        return [0x12, 0x01, UInt8(n >> 8), UInt8(n & 0xFF), 0, 0, 0, 0] + payload
+    }
+
+    /// The server's ENCRYPTION option from a PRELOGIN response payload.
+    static func serverEncryption(_ reply: [UInt8]) -> UInt8? {
+        var i = 0
+        while i + 4 < reply.count, reply[i] != 0xFF {
+            let offset = Int(reply[i + 1]) << 8 | Int(reply[i + 2])
+            if reply[i] == 0x01, offset < reply.count { return reply[offset] }
+            i += 5
+        }
+        return nil
     }
 
     // MARK: Packets
@@ -77,36 +133,12 @@ public final class SQLServerConnection: DatabaseConnection, @unchecked Sendable 
 
     // MARK: Pre-login & login
 
-    private func prelogin(strict: Bool) throws {
-        // VERSION, ENCRYPTION, THREADID, MARS, TERMINATOR
-        let encryption: UInt8 = strict ? 0x00 : 0x02  // strict: already encrypted; else ENCRYPT_NOT_SUP
-        let options: [(UInt8, [UInt8])] = [
-            (0x00, [0x10, 0x00, 0x00, 0x00, 0x00, 0x00]),
-            (0x01, [encryption]),
-            (0x03, [0, 0, 0, 0]),
-            (0x04, [0]),
-        ]
-        var header: [UInt8] = []
-        var data: [UInt8] = []
-        let base = options.count * 5 + 1
-        for (token, value) in options {
-            let offset = base + data.count
-            header += [token, UInt8(offset >> 8), UInt8(offset & 0xFF), UInt8(value.count >> 8), UInt8(value.count & 0xFF)]
-            data += value
-        }
-        try send(.prelogin, header + [0xFF] + data)
-        let reply = try readMessage()
-        // Find the server's ENCRYPTION option.
-        var i = 0
-        while i + 4 < reply.count, reply[i] != 0xFF {
-            let token = reply[i], offset = Int(reply[i + 1]) << 8 | Int(reply[i + 2])
-            if token == 0x01, offset < reply.count, !strict {
-                let mode = reply[offset]
-                if mode == 0x01 || mode == 0x03 {
-                    throw DatabaseError("The server requires encryption. Set SSL mode to Require (TDS 8 strict, SQL Server 2022+ / Azure SQL).")
-                }
-            }
-            i += 5
+    /// Unencrypted session: announce ENCRYPT_NOT_SUP.
+    private func prelogin() throws {
+        try stream.write(Self.preloginPacket(encryption: 0x02))
+        let mode = Self.serverEncryption(try readMessage())
+        if mode == 0x01 || mode == 0x03 {
+            throw DatabaseError("The server requires encryption. Set SSL mode to Prefer or Require.")
         }
     }
 

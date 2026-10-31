@@ -55,7 +55,6 @@ Pushing a `v*` tag builds the app on GitHub Actions and attaches a zip to a GitH
 ## Limitations
 
 - SSH tunnels need key or agent auth (no SSH passwords); text-protocol results only.
-- SQL Server TLS uses TDS 8 "strict" mode (SQL Server 2022 / Azure SQL); older servers that force encryption are not supported yet.
 
 See [ROADMAP.md](ROADMAP.md) for what is done and what is next.
 

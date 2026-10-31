@@ -127,6 +127,24 @@ struct SQLServerTests {
         await c.close()
     }
 
+    @Test func classicTLS() async throws {
+        for mode in [SSLMode.require, .prefer] {
+            let c = try await SQLServerConnection.connect(
+                host: env.host, port: env.port, user: env.user, password: env.password, database: "master", tls: TLSOptions(mode: mode))
+            #expect(c.securityDescription?.hasPrefix("TLSv1.") == true, "\(mode): \(c.securityDescription ?? "nil")")
+            #expect(try await c.strings("SELECT encrypt_option FROM sys.dm_exec_connections WHERE session_id = @@SPID") == ["TRUE"])
+            // Larger results flow through TLS records unchanged.
+            let many = try await c.execute("SELECT TOP 3000 a.name FROM sys.all_objects a CROSS JOIN sys.all_objects b")
+            #expect(many.rows.count == 3000)
+            await c.close()
+        }
+        let plain = try await SQLServerConnection.connect(
+            host: env.host, port: env.port, user: env.user, password: env.password, database: "master", tls: .disabled)
+        #expect(plain.securityDescription == nil)
+        #expect(try await plain.strings("SELECT encrypt_option FROM sys.dm_exec_connections WHERE session_id = @@SPID") == ["FALSE"])
+        await plain.close()
+    }
+
     @Test func wrongPassword() async throws {
         await #expect(throws: DatabaseError.self) {
             _ = try await SQLServerConnection.connect(host: env.host, port: env.port, user: env.user, password: "nope", database: "master")
