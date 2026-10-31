@@ -38,6 +38,27 @@ public struct IndexInfo: Sendable, Hashable, Identifiable {
     public var id: String { name }
 }
 
+public struct ForeignKeyInfo: Sendable, Hashable, Identifiable {
+    public var name: String
+    public var schema: String
+    public var table: String
+    public var columns: [String]
+    public var refSchema: String
+    public var refTable: String
+    public var refColumns: [String]
+    public var id: String { schema + "." + table + "." + name }
+
+    public init(name: String, schema: String, table: String, columns: [String], refSchema: String, refTable: String, refColumns: [String]) {
+        self.name = name
+        self.schema = schema
+        self.table = table
+        self.columns = columns
+        self.refSchema = refSchema
+        self.refTable = refTable
+        self.refColumns = refColumns
+    }
+}
+
 public struct RoutineInfo: Sendable, Hashable, Identifiable {
     public var schema: String
     public var name: String
@@ -254,6 +275,87 @@ public struct Introspector: Sendable {
                     columns: $0[2].displayString.split(separator: ",").map(String.init),
                     unique: $0[1].displayString == "0", primary: $0[0].displayString == "PRIMARY")
             }
+        }
+    }
+
+    // MARK: Foreign keys
+
+    /// All foreign keys declared by tables in `schema`.
+    public func foreignKeys(schema: String) async throws -> [ForeignKeyInfo] {
+        switch dialect {
+        case .postgres:
+            let cols = { (keys: String, rel: String) in
+                """
+                array_to_string(ARRAY(SELECT a.attname FROM unnest(c.\(keys)) WITH ORDINALITY k(n, o)
+                  JOIN pg_attribute a ON a.attrelid = c.\(rel) AND a.attnum = k.n ORDER BY k.o), ',')
+                """
+            }
+            return try await connection.execute(
+                """
+                SELECT c.conname, sc.relname, \(cols("conkey", "conrelid")), tn.nspname, tc.relname, \(cols("confkey", "confrelid"))
+                FROM pg_constraint c
+                JOIN pg_class sc ON sc.oid = c.conrelid JOIN pg_namespace sn ON sn.oid = sc.relnamespace
+                JOIN pg_class tc ON tc.oid = c.confrelid JOIN pg_namespace tn ON tn.oid = tc.relnamespace
+                WHERE c.contype = 'f' AND sn.nspname = \(lit(schema))
+                ORDER BY sc.relname, c.conname
+                """
+            ).rows.map {
+                ForeignKeyInfo(
+                    name: $0[0].displayString, schema: schema, table: $0[1].displayString,
+                    columns: $0[2].displayString.split(separator: ",").map(String.init),
+                    refSchema: $0[3].displayString, refTable: $0[4].displayString,
+                    refColumns: $0[5].displayString.split(separator: ",").map(String.init))
+            }
+        case .mysql:
+            let rows = try await connection.execute(
+                """
+                SELECT CONSTRAINT_NAME, TABLE_NAME, COLUMN_NAME, REFERENCED_TABLE_SCHEMA, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME
+                FROM information_schema.KEY_COLUMN_USAGE
+                WHERE TABLE_SCHEMA = \(lit(schema)) AND REFERENCED_TABLE_NAME IS NOT NULL
+                ORDER BY TABLE_NAME, CONSTRAINT_NAME, ORDINAL_POSITION
+                """
+            ).rows
+            var out: [ForeignKeyInfo] = []
+            for r in rows {
+                let (name, table) = (r[0].displayString, r[1].displayString)
+                if let i = out.indices.last, out[i].name == name, out[i].table == table {
+                    out[i].columns.append(r[2].displayString)
+                    out[i].refColumns.append(r[5].displayString)
+                } else {
+                    out.append(ForeignKeyInfo(
+                        name: name, schema: schema, table: table, columns: [r[2].displayString],
+                        refSchema: r[3].displayString, refTable: r[4].displayString, refColumns: [r[5].displayString]))
+                }
+            }
+            return out
+        case .sqlite:
+            var out: [ForeignKeyInfo] = []
+            for t in try await tables(schema: schema) where t.kind == .table {
+                // id, seq, table, from, to, on_update, on_delete, match
+                let rows = try await connection.execute(
+                    "PRAGMA \(dialect.quote(schema)).foreign_key_list(\(dialect.quote(t.name)))").rows
+                var byID: [String: ForeignKeyInfo] = [:]
+                var order: [String] = []
+                for r in rows {
+                    let id = r[0].displayString
+                    if byID[id] == nil {
+                        order.append(id)
+                        byID[id] = ForeignKeyInfo(
+                            name: "fk_\(t.name)_\(id)", schema: schema, table: t.name, columns: [],
+                            refSchema: schema, refTable: r[2].displayString, refColumns: [])
+                    }
+                    byID[id]!.columns.append(r[3].displayString)
+                    if !r[4].isNull { byID[id]!.refColumns.append(r[4].displayString) }
+                }
+                for id in order {
+                    var fk = byID[id]!
+                    if fk.refColumns.isEmpty {  // REFERENCES t without columns → its primary key
+                        fk.refColumns = try await columns(schema: schema, table: fk.refTable).filter(\.isPrimaryKey).map(\.name)
+                    }
+                    out.append(fk)
+                }
+            }
+            return out
         }
     }
 

@@ -178,6 +178,20 @@ final class AppModel {
         }
     }
 
+    func openDiagram(schema: String, in session: DataSourceSession) {
+        if let tab = tabs.first(where: {
+            if case .diagram(let d) = $0 { return d.dataSourceID == session.config.id && d.schema == schema }
+            return false
+        }) {
+            selectedTabID = tab.id
+            return
+        }
+        let m = DiagramModel(session: session, schema: schema)
+        tabs.append(.diagram(m))
+        selectedTabID = m.id
+        Task { await m.load() }
+    }
+
     /// Inserts `sql` into the active console for the data source (or a new one).
     func insertIntoConsole(_ sql: String, dataSource: UUID) {
         guard let session = session(for: dataSource) else { return }
@@ -236,7 +250,7 @@ final class AppModel {
         switch tab {
         case .console(let c): Task { await c.disconnect() }
         case .table(let t): Task { await t.close() }
-        case .ddl: break
+        case .ddl, .diagram: break
         }
         if selectedTabID == id {
             selectedTabID = tabs.isEmpty ? nil : tabs[min(index, tabs.count - 1)].id

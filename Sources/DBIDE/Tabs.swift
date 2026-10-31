@@ -568,12 +568,14 @@ enum EditorTab: Identifiable {
     case console(ConsoleModel)
     case table(TableDataModel)
     case ddl(DDLModel)
+    case diagram(DiagramModel)
 
     var id: UUID {
         switch self {
         case .console(let m): m.id
         case .table(let m): m.id
         case .ddl(let m): m.id
+        case .diagram(let m): m.id
         }
     }
 
@@ -582,6 +584,7 @@ enum EditorTab: Identifiable {
         case .console(let m): m.title
         case .table(let m): m.title
         case .ddl(let m): m.title
+        case .diagram(let m): m.title
         }
     }
 
@@ -590,6 +593,7 @@ enum EditorTab: Identifiable {
         case .console: "terminal"
         case .table: "tablecells"
         case .ddl: "doc.text"
+        case .diagram: "point.3.connected.trianglepath.dotted"
         }
     }
 
@@ -598,6 +602,7 @@ enum EditorTab: Identifiable {
         case .console(let m): m.dataSourceID
         case .table(let m): m.dataSourceID
         case .ddl(let m): m.dataSourceID
+        case .diagram(let m): m.dataSourceID
         }
     }
 }

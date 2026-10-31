@@ -8,6 +8,7 @@ final class SchemaNode: Identifiable {
     let name: String
     var tables: [TableInfo]?
     var routines: [RoutineInfo] = []
+    var foreignKeys: [ForeignKeyInfo] = []
     var columns: [String: [ColumnInfo]] = [:]
     var indexes: [String: [IndexInfo]] = [:]
     var isLoading = false
@@ -86,6 +87,7 @@ final class DataSourceSession {
         do {
             node.tables = try await intro.tables(schema: node.name)
             node.routines = (try? await intro.routines(schema: node.name)) ?? []
+            node.foreignKeys = (try? await intro.foreignKeys(schema: node.name)) ?? []
             node.columns = [:]
             node.indexes = [:]
             node.error = nil

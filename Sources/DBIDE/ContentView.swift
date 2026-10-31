@@ -43,6 +43,7 @@ struct ContentView: View {
         case .console(let c): ConsoleView(console: c)
         case .table(let t): TableDataView(model: t)
         case .ddl(let d): DDLView(model: d, dialect: app.session(for: d.dataSourceID)?.config.dialect ?? .postgres)
+        case .diagram(let d): DiagramView(model: d)
         }
     }
 }

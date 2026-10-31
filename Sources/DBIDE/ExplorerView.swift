@@ -119,6 +119,7 @@ struct ExplorerView: View {
                         Button("Connect") { Task { await ds.connect() } }
                     }
                     if ds.isConnected, let schema = ds.defaultSchema ?? ds.schemas.first?.name {
+                        Button("Show ER Diagram") { app.openDiagram(schema: schema, in: ds) }
                         Button("Import CSV as New Table…") {
                             app.csvImport = CSVImportTarget(session: ds, schema: schema, table: nil)
                         }
@@ -135,6 +136,7 @@ struct ExplorerView: View {
                     Button("Refresh") {
                         if let n = ds.schema(named: schema) { Task { await ds.loadSchema(n, force: true) } }
                     }
+                    Button("Show ER Diagram") { app.openDiagram(schema: schema, in: ds) }
                     Button("Import CSV as New Table…") {
                         app.csvImport = CSVImportTarget(session: ds, schema: schema, table: nil)
                     }
@@ -406,6 +408,30 @@ private struct TableRow: View {
                     }
                     .help(c.comment ?? "")
                     .tag(ExplorerNode.column(session.config.id, table, c.name))
+                }
+                let fks = schema.foreignKeys.filter { $0.table == table.name }
+                if !fks.isEmpty {
+                    let fkey = key + "/fks"
+                    DisclosureGroup(
+                        isExpanded: Binding(
+                            get: { expanded.contains(fkey) },
+                            set: { if $0 { expanded.insert(fkey) } else { expanded.remove(fkey) } })
+                    ) {
+                        ForEach(fks) { fk in
+                            HStack(spacing: 4) {
+                                Image(systemName: "link").font(.caption).foregroundStyle(.teal)
+                                Text("(\(fk.columns.joined(separator: ", ")))")
+                                Image(systemName: "arrow.right").font(.caption2).foregroundStyle(.tertiary)
+                                Text("\(fk.refSchema == fk.schema ? "" : fk.refSchema + ".")\(fk.refTable)(\(fk.refColumns.joined(separator: ", ")))")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .help(fk.name)
+                            .tag(ExplorerNode.folder(session.config.id, fkey + "/" + fk.name))
+                        }
+                    } label: {
+                        Label("foreign keys", systemImage: "folder")
+                    }
+                    .tag(ExplorerNode.folder(session.config.id, fkey))
                 }
                 let idx = schema.indexes[table.name] ?? []
                 if !idx.isEmpty {

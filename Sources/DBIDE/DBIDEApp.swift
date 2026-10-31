@@ -61,6 +61,17 @@ struct DBIDEApp: App {
                     .keyboardShortcut("s", modifiers: [.command, .shift])
                     .disabled(console == nil)
             }
+            CommandMenu("Database") {
+                Button("Show ER Diagram") {
+                    guard let ds = model.activeDataSource else { return }
+                    let schema = console?.currentSchema ?? ds.defaultSchema ?? ds.schemas.first?.name ?? "main"
+                    model.openDiagram(schema: schema, in: ds)
+                }
+                .keyboardShortcut("u", modifiers: [.command, .option])
+                .disabled(model.activeDataSource == nil)
+                Button("Refresh Data Source") { Task { await model.activeDataSource?.refresh() } }
+                    .disabled(model.activeDataSource?.isConnected != true)
+            }
             CommandMenu("Query") {
                 Button("Execute") { console?.run(.caretOrSelection) }
                     .keyboardShortcut(.return, modifiers: .command)
