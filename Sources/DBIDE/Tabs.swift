@@ -230,7 +230,15 @@ final class ConsoleModel: Identifiable {
             log.append(LogEntry(kind: .statement, text: st.text))
             app?.history.record(st.text, dataSource: dataSourceID)
             do {
-                let res = try await conn.execute(st.text, maxRows: maxRows)
+                // The last read-only query keeps a server cursor open so "load more" pages instead of re-running.
+                let useCursor = st == statements.last && SQLClassifier.isReadOnly(st.text, dialect: dialect)
+                    && ["SELECT", "WITH", "VALUES", "TABLE", "DB"].contains(SQLLexer.leadingKeywords(st.text, count: 1).uppercased())
+                let res: QueryResult
+                if useCursor, let cc = conn as? any CursorCapable {
+                    res = try await cc.openCursor(st.text, pageSize: maxRows)
+                } else {
+                    res = try await conn.execute(st.text, maxRows: maxRows)
+                }
                 log.append(LogEntry(kind: .info, text: res.summary))
                 if res.hasResultSet {
                     newResults.append(ResultTab(title: resultTitle(st.text, index: newResults.count), result: res))
@@ -246,6 +254,10 @@ final class ConsoleModel: Identifiable {
                 break
             }
         }
+        cursorResultID = nil
+        if let last = newResults.last, last.result.truncated, (connection as? any CursorCapable)?.hasOpenCursor == true {
+            cursorResultID = last.id
+        }
         if !newResults.isEmpty {
             results = results.filter(\.pinned) + newResults
             selectedResultID = newResults.first?.id
@@ -260,9 +272,40 @@ final class ConsoleModel: Identifiable {
         return ["BEGIN", "START", "COMMIT", "ROLLBACK", "END", "SAVEPOINT", "RELEASE", "SET", "SHOW", "USE"].contains(kw)
     }
 
-    /// Re-runs a truncated read-only result with a larger row limit (nil = all rows).
+    /// Result tab whose rows continue in an open server cursor.
+    private(set) var cursorResultID: UUID?
+
+    /// Next rows of a truncated result: from the open server cursor when there is one,
+    /// otherwise by re-running the (read-only) statement with a larger limit. nil = all rows.
     func loadMore(_ tabID: UUID, upTo limit: Int?) {
         guard !isRunning, let index = results.firstIndex(where: { $0.id == tabID }) else { return }
+        if tabID == cursorResultID, let cc = connection as? any CursorCapable, cc.hasOpenCursor {
+            let start = results[index].result.rows.count
+            Task {
+                isRunning = true
+                defer { isRunning = false }
+                do {
+                    var more = true
+                    repeat {
+                        let want = limit.map { max(0, $0 - (results.first { $0.id == tabID }?.result.rows.count ?? 0)) } ?? 5000
+                        guard want > 0 else { break }
+                        let (rows, hasMore) = try await cc.fetchMore(want)
+                        more = hasMore
+                        if let i = results.firstIndex(where: { $0.id == tabID }) {
+                            results[i].result.rows += rows
+                            results[i].result.truncated = hasMore
+                        }
+                    } while more && limit == nil
+                    if !more { cursorResultID = nil }
+                    let total = results.first { $0.id == tabID }?.result.rows.count ?? 0
+                    log.append(LogEntry(kind: .info, text: "Fetched \(total - start) more rows from the server cursor\(more ? "" : " (end of result)")"))
+                } catch {
+                    cursorResultID = nil
+                    log.append(LogEntry(kind: .error, text: error.localizedDescription))
+                }
+            }
+            return
+        }
         let sql = results[index].result.statement
         guard SQLClassifier.isReadOnly(sql, dialect: dialect) else { return }
         Task {

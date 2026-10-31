@@ -228,6 +228,20 @@ public final class MongoConnection: @unchecked Sendable {
 
     // MARK: Cursors
 
+    // Open console cursor (kept between "load more" requests).
+    var openCursorID: Int64 = 0
+    var openCursorCollection = ""
+    var openCursorDB = ""
+    var openCursorColumns: [String] = []
+    /// When set, the next drained cursor is kept open instead of killed.
+    var keepNextCursor = false
+
+    func killOpenCursorSync() {
+        guard openCursorID != 0 else { return }
+        _ = try? runSync(["killCursors": .string(openCursorCollection), "cursors": .array([.int64(openCursorID)])], db: openCursorDB)
+        openCursorID = 0
+    }
+
     /// Drains a cursor reply ({cursor: {firstBatch, id, ns}}) up to `limit` documents.
     func drainCursor(_ reply: BSONDocument, db: String, limit: Int) throws -> (docs: [BSONDocument], truncated: Bool) {
         guard var cursor = reply["cursor"]?.document else { return ([], false) }
@@ -244,9 +258,14 @@ public final class MongoConnection: @unchecked Sendable {
             id = cursor["id"]?.int ?? 0
         }
         let truncated = id != 0 || docs.count > limit
-        if id != 0 {
+        if id != 0 && keepNextCursor && docs.count <= limit {
+            openCursorID = id
+            openCursorCollection = collection
+            openCursorDB = db
+        } else if id != 0 {
             _ = try? runSync(["killCursors": .string(collection), "cursors": .array([.int64(id)])], db: db)
         }
+        keepNextCursor = false
         return (Array(docs.prefix(limit)), truncated)
     }
 

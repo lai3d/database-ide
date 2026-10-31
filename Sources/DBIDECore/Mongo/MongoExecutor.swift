@@ -63,6 +63,48 @@ public enum MongoResults {
     }
 }
 
+extension MongoConnection: CursorCapable {
+    public var hasOpenCursor: Bool { openCursorID != 0 }
+
+    /// find / aggregate keep their server cursor open for paging; anything else runs normally.
+    public func openCursor(_ text: String, pageSize: Int) async throws -> QueryResult {
+        let statement = try MongoShellParser.parse(text)
+        guard case .collection(_, let method, _, let modifiers) = statement, ["find", "aggregate"].contains(method),
+            !modifiers.contains(where: { ["count", "explain", "limit"].contains($0.name) })
+        else { return try await execute(text, maxRows: pageSize) }
+        let start = Date()
+        let tag = "dbide:" + UUID().uuidString
+        var result = try await onWorker { [self] in
+            killOpenCursorSync()
+            keepNextCursor = true
+            return try executeSync(statement, text: text, maxRows: pageSize, tag: tag)
+        }
+        openCursorColumns = result.columns.map(\.name)
+        result.truncated = openCursorID != 0
+        result.duration = Date().timeIntervalSince(start)
+        return result
+    }
+
+    public func fetchMore(_ count: Int) async throws -> (rows: [[SQLValue]], hasMore: Bool) {
+        try await onWorker { [self] in
+            guard openCursorID != 0 else { return ([], false) }
+            let reply = try runSync([
+                "getMore": .int64(openCursorID), "collection": .string(openCursorCollection),
+                "batchSize": .int32(Int32(clamping: count)),
+            ], db: openCursorDB)
+            let cursor = reply["cursor"]?.document ?? [:]
+            let docs = (cursor["nextBatch"]?.array ?? []).compactMap(\.document)
+            openCursorID = cursor["id"]?.int ?? 0
+            let columns = openCursorColumns
+            return (docs.map { d in columns.map { d[$0].map(MongoResults.cell) ?? .null } }, openCursorID != 0)
+        }
+    }
+
+    public func closeCursor() async {
+        _ = try? await onWorker { [self] in killOpenCursorSync() }
+    }
+}
+
 extension MongoConnection: DatabaseConnection {
     public var dialect: SQLDialect { .mongodb }
     public var inTransaction: Bool { false }
@@ -73,7 +115,10 @@ extension MongoConnection: DatabaseConnection {
         setRunningTag(tag)
         defer { setRunningTag(nil) }
         let start = Date()
-        var result = try await onWorker { [self] in try executeSync(statement, text: text, maxRows: maxRows, tag: tag) }
+        var result = try await onWorker { [self] in
+            killOpenCursorSync()
+            return try executeSync(statement, text: text, maxRows: maxRows, tag: tag)
+        }
         result.duration = Date().timeIntervalSince(start)
         return result
     }
@@ -219,7 +264,8 @@ extension MongoConnection: DatabaseConnection {
             }
             let cap = limit > 0 ? min(limit, maxRows) : maxRows
             if limit > 0 { cmd["limit"] = .int64(Int64(limit)) }
-            cmd["batchSize"] = .int32(Int32(min(cap, 1000) + (cap < 1000 ? 1 : 0)))
+            // Ask for one extra document to detect truncation, unless the cursor is kept for paging.
+            cmd["batchSize"] = .int32(Int32(min(cap, 1000) + (cap < 1000 && !keepNextCursor ? 1 : 0)))
             if method == "findOne" { cmd["singleBatch"] = .bool(true) }
             let (docs, truncated) = try cursorSync(withComment(cmd), db: db, limit: cap)
             return MongoResults.result(docs, statement: text, truncated: truncated && (limit == 0 || limit > maxRows))

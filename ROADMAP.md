@@ -14,7 +14,7 @@ Estimates are Claude Code session time.
 - ✅ SQL lexer (highlighting) and statement splitter (dollar quotes, nested comments, trigger bodies, MySQL `DELIMITER`)
 - ✅ Introspection: schemas, tables / views, columns, indexes, routines, DDL (all three dialects)
 - ✅ Export: CSV / TSV / JSON / Markdown / SQL INSERT
-- ✅ Tests: unit tests + docker-backed PostgreSQL 16 (TLS) / MySQL 8.4 / MongoDB 7 / ClickHouse 24.8 / SQL Server 2022 / Redis 7.4 / SSH bastion tests (`scripts/test-servers.sh`) — 118 tests
+- ✅ Tests: unit tests + docker-backed PostgreSQL 16 (TLS) / MySQL 8.4 / MongoDB 7 / ClickHouse 24.8 / SQL Server 2022 / Redis 7.4 / SSH bastion tests (`scripts/test-servers.sh`) — 121 tests
 
 ## Phase 1 — Core IDE (MVP)
 
@@ -90,7 +90,7 @@ Developer ID certificate, notarization credentials — only needed to ship a sig
 | 6.1 | ✅ Result grid power tools | Quick row filter, record (transposed) view, header menu (sort, copy column, hide / show), aggregates for selected cells | 0.3h |
 | 6.2 | ✅ Schema compare | Diff two schemas across any SQL data sources (tables, columns, PK, defaults, indexes) and generate migration SQL for the target (reuses the designer's ALTERs; SQLite rebuilds recreate indexes); convergence tested on SQLite and PostgreSQL | 0.4h |
 | 6.3 | ⬜ AI assistant | Explain / write SQL from the schema in context (needs an API key) | 1h |
-| 6.4 | ⬜ Server-side cursors | Stream huge results instead of reading them fully (PG portals, MySQL binary protocol) | 1h |
+| 6.4 | ✅ Server-side cursors | "Load more" pages through an open server cursor instead of re-running: PostgreSQL extended-protocol portal (Execute n + Flush), SQLite stepped statement, MongoDB getMore; any other statement closes it. First page of a 10M-row PG query in < 3 s. MySQL / SQL Server / ClickHouse keep the re-run fallback. Console wiring not yet clicked through in the UI | 0.4h |
 
 ## Later / ideas
 

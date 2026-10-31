@@ -4,7 +4,7 @@ import SQLite3
 private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
 /// SQLite via the system libsqlite3.
-public final class SQLiteConnection: DatabaseConnection, @unchecked Sendable {
+public final class SQLiteConnection: DatabaseConnection, CursorCapable, @unchecked Sendable {
     public let dialect = SQLDialect.sqlite
     public let serverVersion: String
     public let securityDescription: String? = nil
@@ -35,8 +35,50 @@ public final class SQLiteConnection: DatabaseConnection, @unchecked Sendable {
         try SQLiteConnection(path: path, readOnly: readOnly)
     }
 
+    // MARK: Cursor
+
+    private var cursorStmt: OpaquePointer?
+    private var cursorColumns = 0
+    private var pendingRow: [SQLValue]?
+
+    private func finalizeCursor() {
+        if let c = cursorStmt { sqlite3_finalize(c) }
+        cursorStmt = nil
+        pendingRow = nil
+    }
+
+    /// Steps up to `n` rows, then peeks one more to know whether the cursor has more.
+    private func stepRows(_ n: Int) throws -> (rows: [[SQLValue]], hasMore: Bool) {
+        guard let stmt = cursorStmt else { return ([], false) }
+        var rows: [[SQLValue]] = []
+        if let p = pendingRow {
+            rows.append(p)
+            pendingRow = nil
+        }
+        while rows.count <= n {
+            let rc = sqlite3_step(stmt)
+            if rc == SQLITE_DONE {
+                finalizeCursor()
+                return (rows, false)
+            }
+            guard rc == SQLITE_ROW else {
+                let e = error(rc)
+                finalizeCursor()
+                throw e
+            }
+            let row = (0..<cursorColumns).map { value(stmt, Int32($0)) }
+            if rows.count == n {
+                pendingRow = row
+                return (rows, true)
+            }
+            rows.append(row)
+        }
+        return (rows, true)
+    }
+
     public func execute(_ sql: String, maxRows: Int) async throws -> QueryResult {
         try await worker.run { [self] in
+            finalizeCursor()
             defer { if let db { inTransaction = sqlite3_get_autocommit(db) == 0 } }
             return try executeSync(sql, maxRows: maxRows)
         }
@@ -129,8 +171,43 @@ public final class SQLiteConnection: DatabaseConnection, @unchecked Sendable {
         if let db { sqlite3_interrupt(db) }
     }
 
+    public var hasOpenCursor: Bool { cursorStmt != nil }
+
+    public func openCursor(_ sql: String, pageSize: Int) async throws -> QueryResult {
+        try await worker.run { [self] in
+            finalizeCursor()
+            guard let db else { throw DatabaseError("Connection closed") }
+            let start = Date()
+            var stmt: OpaquePointer?
+            let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
+            guard rc == SQLITE_OK, let stmt else { throw error(rc, sql: sql) }
+            cursorStmt = stmt
+            cursorColumns = Int(sqlite3_column_count(stmt))
+            var result = QueryResult(statement: sql)
+            result.columns = (0..<cursorColumns).map { i in
+                ResultColumn(
+                    name: sqlite3_column_name(stmt, Int32(i)).map { String(cString: $0) } ?? "?",
+                    typeName: sqlite3_column_decltype(stmt, Int32(i)).map { String(cString: $0) } ?? "")
+            }
+            let (rows, more) = try stepRows(pageSize)
+            result.rows = rows
+            result.truncated = more
+            result.duration = Date().timeIntervalSince(start)
+            return result
+        }
+    }
+
+    public func fetchMore(_ count: Int) async throws -> (rows: [[SQLValue]], hasMore: Bool) {
+        try await worker.run { [self] in try stepRows(count) }
+    }
+
+    public func closeCursor() async {
+        _ = try? await worker.run { [self] in finalizeCursor() }
+    }
+
     public func close() async {
         _ = try? await worker.run { [self] in
+            finalizeCursor()
             sqlite3_close_v2(db)
             db = nil
         }

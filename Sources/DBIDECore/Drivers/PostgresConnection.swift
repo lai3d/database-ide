@@ -10,7 +10,7 @@ public final class PostgresConnection: DatabaseConnection, @unchecked Sendable {
     private var stream: any ByteStream
     public private(set) var securityDescription: String?
     public private(set) var inTransaction = false
-    private let worker = SerialWorker(label: "dbide.postgres")
+    let worker = SerialWorker(label: "dbide.postgres")
     private let host: String
     private let port: Int
     private var backendPID: Int32 = 0
@@ -18,6 +18,8 @@ public final class PostgresConnection: DatabaseConnection, @unchecked Sendable {
     public private(set) var parameters: [String: String] = [:]
     /// Notices raised by the server during the last statement (RAISE NOTICE etc).
     public private(set) var notices: [String] = []
+    /// Column kinds of the suspended portal (extended protocol cursor), nil when none is open.
+    var portalKinds: [PGTypeKind]?
 
     public static func connect(
         host: String, port: Int = 5432, user: String, password: String, database: String,
@@ -68,7 +70,7 @@ public final class PostgresConnection: DatabaseConnection, @unchecked Sendable {
 
     // MARK: Framing
 
-    private func send(_ type: UInt8, _ payload: [UInt8]) throws {
+    func send(_ type: UInt8, _ payload: [UInt8]) throws {
         var w = ByteWriter()
         w.u8(type)
         w.int32BE(Int32(payload.count + 4))
@@ -76,7 +78,7 @@ public final class PostgresConnection: DatabaseConnection, @unchecked Sendable {
         try stream.write(w.bytes)
     }
 
-    private func receive() throws -> (type: UInt8, body: ByteReader) {
+    func receive() throws -> (type: UInt8, body: ByteReader) {
         let header = try stream.read(5)
         var r = ByteReader(header)
         let type = try r.u8()
@@ -85,7 +87,7 @@ public final class PostgresConnection: DatabaseConnection, @unchecked Sendable {
         return (type, ByteReader(try stream.read(length - 4)))
     }
 
-    private static func parseError(_ body: ByteReader) -> DatabaseError {
+    static func parseError(_ body: ByteReader) -> DatabaseError {
         var r = body
         var fields: [UInt8: String] = [:]
         while let t = try? r.u8(), t != 0 { fields[t] = (try? r.cString()) ?? "" }
@@ -183,7 +185,10 @@ public final class PostgresConnection: DatabaseConnection, @unchecked Sendable {
     // MARK: Query
 
     public func execute(_ sql: String, maxRows: Int) async throws -> QueryResult {
-        try await worker.run { [self] in try executeSync(sql, maxRows: maxRows) }
+        try await worker.run { [self] in
+            try closePortalSync()
+            return try executeSync(sql, maxRows: maxRows)
+        }
     }
 
     private func executeSync(_ sql: String, maxRows: Int) throws -> QueryResult {

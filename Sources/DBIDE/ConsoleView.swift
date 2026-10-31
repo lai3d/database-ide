@@ -219,7 +219,7 @@ private struct ResultsPanel: View {
                     .id(r.id)
                 if r.result.truncated {
                     HStack(spacing: 10) {
-                        Text("Showing first \(r.result.rows.count) rows.")
+                        Text("Showing first \(r.result.rows.count) rows\(console.cursorResultID == r.id ? " · server cursor open" : "").")
                         if SQLClassifier.isReadOnly(r.result.statement, dialect: console.dialect) {
                             Button("Load \(console.maxRows) more") {
                                 console.loadMore(r.id, upTo: r.result.rows.count + console.maxRows)
