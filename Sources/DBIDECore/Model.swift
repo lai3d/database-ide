@@ -176,6 +176,8 @@ public protocol DatabaseConnection: AnyObject, Sendable {
     var serverVersion: String { get }
     /// TLS details when the session is encrypted, nil for plaintext / local files.
     var securityDescription: String? { get }
+    /// Whether the session is inside an open transaction (as reported by the server after the last statement).
+    var inTransaction: Bool { get }
     /// Executes a single statement. Result sets beyond `maxRows` are drained and dropped.
     func execute(_ sql: String, maxRows: Int) async throws -> QueryResult
     /// Best-effort cancel of the statement currently running. Safe from any thread.

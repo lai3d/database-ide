@@ -22,6 +22,8 @@ A native macOS database IDE in the spirit of JetBrains DataGrip, written in Swif
   copy rows as TSV/CSV/JSON/Markdown/INSERT, export to file.
 - **Table editor**: WHERE / ORDER BY filters, paging, row count; edit cells, set NULL, add/delete rows, preview the
   generated SQL and submit it in one transaction (tables with a primary key).
+- **Transactions**: Auto / Manual commit per console, Commit (⇧⌘K) / Rollback, open-transaction indicator.
+- **Formatter** (⌥⌘L) for the selection or the whole console.
 - **DDL viewer**, **query history** (⇧⌘E), consoles and their text persist across launches.
 
 ## Requirements

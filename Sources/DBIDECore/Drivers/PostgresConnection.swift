@@ -10,6 +10,7 @@ public final class PostgresConnection: DatabaseConnection, @unchecked Sendable {
     private let socket: TCPSocket
     private var stream: any ByteStream
     public private(set) var securityDescription: String?
+    public private(set) var inTransaction = false
     private let worker = SerialWorker(label: "dbide.postgres")
     private let host: String
     private let port: Int
@@ -258,6 +259,8 @@ public final class PostgresConnection: DatabaseConnection, @unchecked Sendable {
             case UInt8(ascii: "A"), UInt8(ascii: "K"):
                 break
             case UInt8(ascii: "Z"):
+                let status = (try? r.u8()) ?? UInt8(ascii: "I")
+                inTransaction = status != UInt8(ascii: "I")  // 'T' in transaction, 'E' failed transaction
                 if let failure { throw failure }
                 // Prefer the last result that returned rows; otherwise the last one.
                 var res = results.last(where: { $0.hasResultSet }) ?? results.last ?? QueryResult(statement: sql)

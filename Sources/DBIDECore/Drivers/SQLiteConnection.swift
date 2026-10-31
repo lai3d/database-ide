@@ -8,6 +8,7 @@ public final class SQLiteConnection: DatabaseConnection, @unchecked Sendable {
     public let dialect = SQLDialect.sqlite
     public let serverVersion: String
     public let securityDescription: String? = nil
+    public private(set) var inTransaction = false
     private var db: OpaquePointer?
     private let worker = SerialWorker(label: "dbide.sqlite")
     public let path: String
@@ -35,7 +36,10 @@ public final class SQLiteConnection: DatabaseConnection, @unchecked Sendable {
     }
 
     public func execute(_ sql: String, maxRows: Int) async throws -> QueryResult {
-        try await worker.run { [self] in try executeSync(sql, maxRows: maxRows) }
+        try await worker.run { [self] in
+            defer { if let db { inTransaction = sqlite3_get_autocommit(db) == 0 } }
+            return try executeSync(sql, maxRows: maxRows)
+        }
     }
 
     private func error(_ rc: Int32, sql: String? = nil) -> DatabaseError {
@@ -101,6 +105,7 @@ public final class SQLiteConnection: DatabaseConnection, @unchecked Sendable {
         if !result.hasResultSet {
             result.affectedRows = Int(sqlite3_total_changes64(db) - totalBefore)
         }
+        inTransaction = sqlite3_get_autocommit(db) == 0
         result.duration = Date().timeIntervalSince(start)
         return result
     }

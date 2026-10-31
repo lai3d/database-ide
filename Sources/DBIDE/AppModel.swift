@@ -187,6 +187,30 @@ final class AppModel {
 
     func close(_ id: UUID) {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        if case .console(let c) = tabs[index], c.inTransaction {
+            let alert = NSAlert()
+            alert.messageText = "“\(c.title)” has an uncommitted transaction"
+            alert.informativeText = "Commit or roll back before closing the console?"
+            alert.addButton(withTitle: "Commit")
+            alert.addButton(withTitle: "Rollback")
+            alert.addButton(withTitle: "Cancel")
+            switch alert.runModal() {
+            case .alertFirstButtonReturn:
+                Task {
+                    await c.endTransaction(commit: true)
+                    if !c.inTransaction { close(id) }
+                }
+                return
+            case .alertSecondButtonReturn:
+                Task {
+                    await c.endTransaction(commit: false)
+                    close(id)
+                }
+                return
+            default:
+                return
+            }
+        }
         let tab = tabs.remove(at: index)
         switch tab {
         case .console(let c): Task { await c.disconnect() }

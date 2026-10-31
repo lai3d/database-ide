@@ -45,6 +45,10 @@ final class ConsoleModel: Identifiable {
     /// Range of the statement currently executing, highlighted in the editor.
     var executingRange: NSRange?
     var maxRows = 500
+    /// Manual mode opens a transaction before the first statement; Commit / Rollback end it.
+    var autoCommit = true
+    /// Mirrors the server's view after each statement (also catches a typed BEGIN).
+    private(set) var inTransaction = false
     /// Bumped when completion metadata finished loading.
     var catalogVersion = 0
     @ObservationIgnored var loadingCatalog: Set<String> = []
@@ -152,6 +156,16 @@ final class ConsoleModel: Identifiable {
         var newResults: [ResultTab] = []
         for st in statements {
             executingRange = st.range
+            if !autoCommit, !conn.inTransaction, !isTransactionControl(st.text) {
+                do {
+                    _ = try await conn.execute(dialect == .mysql ? "START TRANSACTION" : "BEGIN")
+                    log.append(LogEntry(kind: .info, text: "Transaction started (manual commit mode)"))
+                } catch {
+                    log.append(LogEntry(kind: .error, text: error.localizedDescription))
+                    break
+                }
+            }
+            defer { inTransaction = conn.inTransaction }
             log.append(LogEntry(kind: .statement, text: st.text))
             app?.history.record(st.text, dataSource: dataSourceID)
             do {
@@ -178,6 +192,39 @@ final class ConsoleModel: Identifiable {
             selectedResultID = nil
         }
         if statements.contains(where: { isDDL($0.text) }) { await dataSource?.refreshAfterDDL() }
+    }
+
+    private func isTransactionControl(_ sql: String) -> Bool {
+        let kw = SQLLexer.leadingKeywords(sql, count: 1).uppercased()
+        return ["BEGIN", "START", "COMMIT", "ROLLBACK", "END", "SAVEPOINT", "RELEASE", "SET", "SHOW", "USE"].contains(kw)
+    }
+
+    /// COMMIT or ROLLBACK the open transaction.
+    func endTransaction(commit: Bool) async {
+        guard let conn = connection, !isRunning else { return }
+        isRunning = true
+        defer { isRunning = false }
+        let sql = commit ? "COMMIT" : "ROLLBACK"
+        log.append(LogEntry(kind: .statement, text: sql))
+        do {
+            _ = try await conn.execute(sql)
+            log.append(LogEntry(kind: .info, text: commit ? "Committed" : "Rolled back"))
+        } catch {
+            log.append(LogEntry(kind: .error, text: error.localizedDescription))
+        }
+        inTransaction = conn.inTransaction
+    }
+
+    /// Reformats the selection, or the whole console when nothing is selected.
+    func reformat() {
+        let ns = text as NSString
+        if selection.length > 0, NSMaxRange(selection) <= ns.length {
+            let formatted = SQLFormatter.format(ns.substring(with: selection), dialect: dialect)
+            text = ns.replacingCharacters(in: selection, with: formatted)
+            selection = NSRange(location: selection.location, length: (formatted as NSString).length)
+        } else {
+            text = SQLFormatter.format(text, dialect: dialect)
+        }
     }
 
     private func resultTitle(_ sql: String, index: Int) -> String {

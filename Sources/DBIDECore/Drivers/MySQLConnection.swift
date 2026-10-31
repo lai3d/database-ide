@@ -10,6 +10,7 @@ public final class MySQLConnection: DatabaseConnection, @unchecked Sendable {
     private let socket: TCPSocket
     private var stream: any ByteStream
     public private(set) var securityDescription: String?
+    public private(set) var inTransaction = false
     private let tls: TLSOptions
     private let worker = SerialWorker(label: "dbide.mysql")
     private var sequence: UInt8 = 0
@@ -271,6 +272,7 @@ public final class MySQLConnection: DatabaseConnection, @unchecked Sendable {
                 let affected = try r.lenencInt() ?? 0
                 _ = try r.lenencInt()
                 let status = UInt16(try r.uintLE(2))
+                inTransaction = status & 0x0001 != 0
                 _ = try r.uintLE(2)
                 let info = String(decoding: r.rest(), as: UTF8.self)
                 results.append(
@@ -309,7 +311,9 @@ public final class MySQLConnection: DatabaseConnection, @unchecked Sendable {
                         var e = ByteReader(p)
                         _ = try e.u8()
                         _ = try e.uintLE(2)
-                        more = UInt16(try e.uintLE(2)) & Self.moreResultsExist != 0
+                        let status = UInt16(try e.uintLE(2))
+                        inTransaction = status & 0x0001 != 0
+                        more = status & Self.moreResultsExist != 0
                         break
                     }
                     if p.first == 0xFF {

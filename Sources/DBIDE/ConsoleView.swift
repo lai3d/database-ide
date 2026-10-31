@@ -73,6 +73,34 @@ struct ConsoleView: View {
                 .frame(maxWidth: 180)
                 .help("Current schema")
             }
+            Divider().frame(height: 16)
+            Picker("Transaction", selection: $console.autoCommit) {
+                Text("Auto").tag(true)
+                Text("Manual").tag(false)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            .help("Transaction mode: Auto-commit, or Manual (open a transaction, then Commit / Rollback)")
+            if console.inTransaction || !console.autoCommit {
+                Button {
+                    Task { await console.endTransaction(commit: true) }
+                } label: {
+                    Label("Commit", systemImage: "checkmark.circle")
+                }
+                .disabled(!console.inTransaction || console.isRunning)
+                Button {
+                    Task { await console.endTransaction(commit: false) }
+                } label: {
+                    Label("Rollback", systemImage: "arrow.uturn.backward.circle")
+                }
+                .disabled(!console.inTransaction || console.isRunning)
+            }
+            if console.inTransaction {
+                Label("Transaction open", systemImage: "exclamationmark.circle.fill")
+                    .foregroundStyle(.orange)
+                    .help("Changes are not visible to other sessions until you commit")
+            }
             Spacer()
             if console.isRunning || console.isConnecting {
                 ProgressView().controlSize(.small)

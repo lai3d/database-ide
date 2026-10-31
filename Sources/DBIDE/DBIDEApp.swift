@@ -60,6 +60,15 @@ struct DBIDEApp: App {
                     .keyboardShortcut(".")
                     .disabled(console?.isRunning != true)
                 Divider()
+                Button("Commit") { Task { await console?.endTransaction(commit: true) } }
+                    .keyboardShortcut("k", modifiers: [.command, .shift])
+                    .disabled(console?.inTransaction != true)
+                Button("Rollback") { Task { await console?.endTransaction(commit: false) } }
+                    .disabled(console?.inTransaction != true)
+                Divider()
+                Button("Reformat SQL") { console?.reformat() }
+                    .keyboardShortcut("l", modifiers: [.command, .option])
+                    .disabled(console == nil)
                 Button("Toggle Comment") {
                     NSApp.sendAction(#selector(SQLTextView.toggleComment(_:)), to: nil, from: nil)
                 }
