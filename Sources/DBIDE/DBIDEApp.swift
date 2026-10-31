@@ -23,7 +23,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct DBIDEApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @State private var model = AppModel()
+    @State private var model: AppModel
+
+    init() {
+        Preferences.register()
+        _model = State(initialValue: AppModel())
+    }
 
     var body: some Scene {
         WindowGroup("DBIDE") {
@@ -107,6 +112,7 @@ struct DBIDEApp: App {
                     .keyboardShortcut("e", modifiers: [.command, .shift])
             }
         }
+        Settings { SettingsView() }
     }
 
     private var console: ConsoleModel? {

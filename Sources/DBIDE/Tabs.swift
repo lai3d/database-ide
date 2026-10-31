@@ -76,7 +76,7 @@ final class ConsoleModel: Identifiable {
     var isDirty: Bool { fileURL != nil && text != savedText }
 
     /// Manual mode opens a transaction before the first statement; Commit / Rollback end it.
-    var autoCommit = true
+    var autoCommit = Preferences.defaultAutoCommit
     /// Mirrors the server's view after each statement (also catches a typed BEGIN).
     private(set) var inTransaction = false
     /// Bumped when completion metadata finished loading.
@@ -333,11 +333,11 @@ final class ConsoleModel: Identifiable {
     func reformat() {
         let ns = text as NSString
         if selection.length > 0, NSMaxRange(selection) <= ns.length {
-            let formatted = SQLFormatter.format(ns.substring(with: selection), dialect: dialect)
+            let formatted = SQLFormatter.format(ns.substring(with: selection), dialect: dialect, options: .init(uppercaseKeywords: Preferences.uppercaseKeywords))
             text = ns.replacingCharacters(in: selection, with: formatted)
             selection = NSRange(location: selection.location, length: (formatted as NSString).length)
         } else {
-            text = SQLFormatter.format(text, dialect: dialect)
+            text = SQLFormatter.format(text, dialect: dialect, options: .init(uppercaseKeywords: Preferences.uppercaseKeywords))
         }
     }
 

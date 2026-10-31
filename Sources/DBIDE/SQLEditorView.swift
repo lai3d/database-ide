@@ -4,7 +4,7 @@ import SwiftUI
 
 @MainActor
 enum EditorTheme {
-    static let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    static var font: NSFont { NSFont.monospacedSystemFont(ofSize: Preferences.fontSize, weight: .regular) }
     static let gridFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
 
     static func color(for kind: SQLTokenKind) -> NSColor {
@@ -35,6 +35,7 @@ struct SQLEditorView: NSViewRepresentable {
     var errorRange: NSRange? = nil
     var onSelectionChange: ((NSRange) -> Void)? = nil
     var completer: Completer? = nil
+    @AppStorage(Preferences.fontSizeKey) private var fontSize = 13.0
     /// Bumped when more catalog data arrived; an open popup refreshes.
     var completionVersion = 0
 
@@ -107,6 +108,13 @@ struct SQLEditorView: NSViewRepresentable {
             c.highlight()
         }
         c.updateMarkers()
+        if c.lastFontSize != fontSize {
+            c.lastFontSize = fontSize
+            textView.font = EditorTheme.font
+            textView.typingAttributes = EditorTheme.baseAttributes
+            c.highlight()
+            scrollView.verticalRulerView?.needsDisplay = true
+        }
         if c.lastCompletionVersion != completionVersion {
             c.lastCompletionVersion = completionVersion
             if c.popup.isVisible { c.updateCompletion(explicit: false) }
@@ -122,6 +130,7 @@ struct SQLEditorView: NSViewRepresentable {
         private var shownError: NSRange?
         let popup = CompletionPopup()
         var lastCompletionVersion = 0
+        var lastFontSize = Preferences.fontSize
         /// Set by the text view when the user typed a word character or `.`.
         var triggerPending = false
         var suppressTrigger = false
@@ -140,7 +149,7 @@ struct SQLEditorView: NSViewRepresentable {
             highlight()
             shownError = nil
             updateMarkers(force: true)
-            if triggerPending || popup.isVisible {
+            if (triggerPending && Preferences.autoComplete) || popup.isVisible {
                 inTextChange = true
                 updateCompletion(explicit: false)
                 inTextChange = false
@@ -216,7 +225,7 @@ struct SQLEditorView: NSViewRepresentable {
                     storage.addAttribute(.font, value: NSFontManager.shared.convert(EditorTheme.font, toHaveTrait: .italicFontMask), range: token.range)
                 }
                 if token.kind == .keyword {
-                    storage.addAttribute(.font, value: NSFont.monospacedSystemFont(ofSize: 13, weight: .semibold), range: token.range)
+                    storage.addAttribute(.font, value: NSFont.monospacedSystemFont(ofSize: Preferences.fontSize, weight: .semibold), range: token.range)
                 }
             }
             storage.endEditing()
