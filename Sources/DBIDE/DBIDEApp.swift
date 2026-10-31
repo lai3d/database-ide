@@ -26,6 +26,9 @@ struct DBIDEApp: App {
     @State private var model: AppModel
 
     init() {
+        // Launchers (IDE Toolbox) pass a folder in argv; AppKit would treat it as a document
+        // to open, and SDK-26 SwiftUI then skips the first window.
+        UserDefaults.standard.register(defaults: ["NSTreatUnknownArgumentsAsOpen": "NO"])
         Preferences.register()
         _model = State(initialValue: AppModel())
     }
