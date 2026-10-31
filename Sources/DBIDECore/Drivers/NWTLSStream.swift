@@ -57,7 +57,12 @@ final class NWTLSStream: ByteStream, @unchecked Sendable {
             PreambleRegistry.lock.lock()
             PreambleRegistry.set(preamble)
         }
-        defer { if preamble != nil { PreambleRegistry.lock.unlock() } }
+        defer {
+            if preamble != nil {
+                PreambleRegistry.set(nil)
+                PreambleRegistry.lock.unlock()
+            }
+        }
         guard let nwPort = NWEndpoint.Port(rawValue: UInt16(port)) else { throw DatabaseError("Invalid port \(port)") }
         connection = NWConnection(host: NWEndpoint.Host(host), port: nwPort, using: params)
 
@@ -166,7 +171,7 @@ final class PreambleFramer: NWProtocolFramerImplementation {
 
     func start(framer: NWProtocolFramer.Instance) -> NWProtocolFramer.StartResult {
         // The preamble is handed over through PreambleRegistry (held locked by the opener).
-        preamble = PreambleRegistry.take()
+        preamble = PreambleRegistry.current()
         queue = preamble?.steps ?? []
         advance(framer)
         return .willMarkReady
@@ -229,14 +234,22 @@ final class PreambleFramer: NWProtocolFramerImplementation {
     func cleanup(framer: NWProtocolFramer.Instance) {}
 }
 
-/// Hands a preamble to the next framer instance created on this process.
-/// Connections are opened one at a time under the lock, so there is no mix-up.
+/// Hands the preamble to the framer instances of the connection being opened.
+/// Openers hold `lock` until their connection is ready, so only one preamble is pending at a time.
+/// Every instance gets it: Network.framework may race several attempts (IPv6 / IPv4 for
+/// "localhost"), each with its own framer running the preamble on its own socket.
 enum PreambleRegistry {
     nonisolated(unsafe) private static var pending: TLSPreamble?
+    private static let valueLock = NSLock()
     static let lock = NSLock()
-    static func set(_ p: TLSPreamble?) { pending = p }
-    static func take() -> TLSPreamble? {
-        defer { pending = nil }
+    static func set(_ p: TLSPreamble?) {
+        valueLock.lock()
+        pending = p
+        valueLock.unlock()
+    }
+    static func current() -> TLSPreamble? {
+        valueLock.lock()
+        defer { valueLock.unlock() }
         return pending
     }
 }
