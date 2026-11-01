@@ -7,6 +7,8 @@ struct DataSourceEditor: View {
     @Environment(AppModel.self) private var app
     @State var config: DataSourceConfig
     let isNew: Bool
+    /// Password handed over with the request (a `dbide://connect` link).
+    var initialPassword: String?
     @State private var password = ""
     @State private var passwordChanged = false
     @State private var testState: TestState = .idle
@@ -23,6 +25,12 @@ struct DataSourceEditor: View {
                 .font(.title3.weight(.semibold))
                 .padding([.horizontal, .top])
                 .padding(.bottom, 8)
+                .onAppear {
+                    if let initialPassword, !passwordChanged {
+                        password = initialPassword
+                        passwordChanged = true
+                    }
+                }
             Form {
                 if isNew {
                     HStack {

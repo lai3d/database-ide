@@ -22,7 +22,7 @@ struct ContentView: View {
             }
         }
         .sheet(item: $app.editingDataSource) { config in
-            DataSourceEditor(config: config, isNew: app.editingIsNew)
+            DataSourceEditor(config: config, isNew: app.editingIsNew, initialPassword: app.editingPassword)
         }
         .sheet(isPresented: $app.showGoTo) { GoToTableView() }
         .sheet(item: $app.csvImport) { CSVImportView(target: $0) }
