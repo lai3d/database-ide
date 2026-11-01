@@ -4,7 +4,25 @@ import SwiftUI
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    var model: AppModel?
+    var model: AppModel? {
+        didSet { if let model { pendingLinks.forEach(model.handle(link:)); pendingLinks = [] } }
+    }
+    /// `dbide://` links that arrived before the window (and model) existed.
+    private var pendingLinks: [URL] = []
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // Handle `dbide://connect?…` ourselves: SwiftUI would otherwise open a second window per link.
+        NSAppleEventManager.shared().setEventHandler(
+            self, andSelector: #selector(handleGetURL(_:withReply:)),
+            forEventClass: AEEventClass(kInternetEventClass), andEventID: AEEventID(kAEGetURL))
+    }
+
+    @objc private func handleGetURL(_ event: NSAppleEventDescriptor, withReply reply: NSAppleEventDescriptor) {
+        guard let text = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
+              let url = URL(string: text) else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        if let model { model.handle(link: url) } else { pendingLinks.append(url) }
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         signal(SIGPIPE, SIG_IGN)

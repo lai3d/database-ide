@@ -42,6 +42,8 @@ final class AppModel {
     /// Data source being edited in the sheet (nil = none; new config = add).
     var editingDataSource: DataSourceConfig?
     var editingIsNew = false
+    /// Password for the data source in the sheet, when a link supplied one.
+    var editingPassword: String?
     var showHistory = false
     var showGoTo = false
     var csvImport: CSVImportTarget?
@@ -87,11 +89,28 @@ final class AppModel {
         if dialect == .sqlserver { c.user = "sa"; c.database = "master" }
         editingDataSource = c
         editingIsNew = true
+        editingPassword = nil
+    }
+
+    /// `dbide://connect?url=…&name=…` from another app: focuses the matching data source,
+    /// or opens the New Data Source sheet filled in (nothing connects until the user saves).
+    func handle(link url: URL) {
+        guard let request = ConnectionLink.parse(url) else { return }
+        if let config = ConnectionLink.match(request, in: dataSources.map(\.config)), let session = session(for: config.id) {
+            editingDataSource = nil
+            openConsole(for: session)
+            if !session.isConnected { Task { await session.connect() } }
+            return
+        }
+        editingPassword = request.parsed.password
+        editingIsNew = true
+        editingDataSource = request.parsed.config
     }
 
     func beginEdit(_ session: DataSourceSession) {
         editingDataSource = session.config
         editingIsNew = false
+        editingPassword = nil
     }
 
     func saveDataSource(_ config: DataSourceConfig, password: String?) {

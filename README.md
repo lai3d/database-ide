@@ -54,6 +54,19 @@ swift scripts/make-icon.swift # regenerate Resources/AppIcon.icns
 Pushing a `v*` tag builds the app on GitHub Actions and attaches a zip to a GitHub release
 (ad-hoc signed, not notarized — right-click → Open the first time).
 
+## Opening a connection from another app
+
+Other apps (e.g. PHPIDE reading a project's `.env`) can hand DBIDE a connection:
+
+```sh
+open "dbide://connect?url=$(python3 -c 'import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1],safe=""))' 'postgresql://app@127.0.0.1:5432/app')&name=My%20app"
+```
+
+`url` is any connection string the New Data Source sheet accepts (percent-encoded); `name` is optional.
+If a saved data source has the same engine, host, port, database and user (or SQLite file), DBIDE opens
+its console and connects. Otherwise it shows the New Data Source sheet filled in, and nothing is saved
+or connected until you click Add.
+
 ## Limitations
 
 - SSH tunnels need key or agent auth (no SSH passwords); text-protocol results only.
